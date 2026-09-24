@@ -1,0 +1,33 @@
+{
+  "name": "mystical-armies",
+  "version": "1.0.0",
+  "description": "Mystical Armies - 2D auto-battle strategy game",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "sim": "tsx scripts/sim.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/livredslot/Claude.git"
+  },
+  "bugs": {
+    "url": "https://github.com/livredslot/Claude/issues"
+  },
+  "homepage": "https://github.com/livredslot/Claude#readme",
+  "dependencies": {
+    "phaser": "^3.90.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.1"
+  },
+  "private": true,
+  "type": "module"
+}
