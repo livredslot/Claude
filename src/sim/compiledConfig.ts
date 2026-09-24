@@ -3,7 +3,7 @@
  * units the simulation uses (sub-tiles, centi-HP, ticks). Rounding happens once
  * here, so the simulation itself only ever sees integers.
  */
-import { SIM_RULES, STANCE_RULES, UNITS, UNIT_RULES, UNIT_TYPES, type UnitType } from '../config/gameConfig';
+import { KING_RULES, SIM_RULES, STANCE_RULES, UNITS, UNIT_RULES, UNIT_TYPES, type UnitType } from '../config/gameConfig';
 import { HP_SCALE, tilesToSub } from './fixed';
 
 const TPS = SIM_RULES.ticksPerSecond;
@@ -63,6 +63,13 @@ export const C = {
   medicFightBackTicks: secondsToTicks(UNIT_RULES.medicFightBackWindow),
   mageRadius: tilesToSub(UNIT_RULES.mageAreaRadius),
   mageRadiusSq: sq(tilesToSub(UNIT_RULES.mageAreaRadius)),
+
+  kingEngageSq: sq(tilesToSub(KING_RULES.engageRange)),
+  kingGuardSq: sq(tilesToSub(KING_RULES.guardRadius)),
+  kingGuardResponseSq: sq(tilesToSub(KING_RULES.guardResponseRange)),
+  kingHuntSq: sq(tilesToSub(KING_RULES.huntRange)),
+  kingHorsemanHuntSq: sq(tilesToSub(KING_RULES.horsemanHuntRange)),
+  kingHomeSlackSq: sq(tilesToSub(KING_RULES.homeSlack)),
 
   holdTriggerSq: sq(tilesToSub(STANCE_RULES.holdTriggerRange)),
   flankEngageSq: sq(tilesToSub(STANCE_RULES.flankEngageRange)),

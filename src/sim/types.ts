@@ -51,7 +51,7 @@ export type BattleEvent =
   | { kind: 'interrupt'; unit: number }
   | { kind: 'death'; unit: number };
 
-export type EndReason = 'annihilation' | 'timeout';
+export type EndReason = 'king' | 'annihilation' | 'timeout';
 
 export interface BattleResult {
   /** 0 or 1, or null for a draw. */

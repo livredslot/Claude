@@ -17,7 +17,7 @@
  * on every device.
  */
 
-export type UnitType = 'swordsman' | 'spearman' | 'horseman' | 'archer' | 'medic' | 'mage';
+export type UnitType = 'swordsman' | 'spearman' | 'horseman' | 'archer' | 'medic' | 'mage' | 'king';
 
 export const UNIT_TYPES: readonly UnitType[] = [
   'swordsman',
@@ -26,6 +26,7 @@ export const UNIT_TYPES: readonly UnitType[] = [
   'archer',
   'medic',
   'mage',
+  'king',
 ];
 
 export interface UnitStats {
@@ -53,6 +54,26 @@ export const UNITS: Record<UnitType, UnitStats> = {
   archer: { name: 'Archer', hp: 60, damage: 10, attackInterval: 1.5, range: 6.0, speed: 1.0, value: 2, ranged: true },
   medic: { name: 'Medic', hp: 70, damage: 3, attackInterval: 1.0, range: 1.0, speed: 1.1, value: 2, ranged: false },
   mage: { name: 'Mage', hp: 50, damage: 20, attackInterval: 3.0, range: 5.0, speed: 0.9, value: 3, ranged: true },
+  king: { name: 'King', hp: 200, damage: 25, attackInterval: 1.0, range: 1.0, speed: 0.6, value: 5, ranged: false },
+};
+
+/**
+ * The King: if your King dies, you lose immediately (like chess).
+ * The King stays near where it was placed and only fights enemies that come close.
+ */
+export const KING_RULES = {
+  /** The King attacks enemies that come within this many tiles. */
+  engageRange: 3,
+  /** Allies rush to defend when an enemy is this close to their King (tiles)... */
+  guardRadius: 4,
+  /** ...if that enemy is also within this many tiles of the ally. */
+  guardResponseRange: 8,
+  /** Units go for the enemy King when it is within this many tiles. */
+  huntRange: 5,
+  /** Horsemen look for the enemy King from further away. */
+  horsemanHuntRange: 8,
+  /** The King walks back to its starting tile when it drifts further than this (tiles). */
+  homeSlack: 1,
 };
 
 /** Special unit rules. */
@@ -101,9 +122,27 @@ export const ARMY_RULES = {
     archer: 25,
     medic: 5,
     mage: 3,
+    king: 1,
   } as Record<UnitType, number>,
+  /** Every army must contain exactly this many of these units. */
+  required: { king: 1 } as Partial<Record<UnitType, number>>,
   /** Deployment zone: this many columns nearest each player's own map edge. */
   deployColumns: 6,
+};
+
+/** Army setup screen. */
+export const SETUP_RULES = {
+  /** Seconds to choose and place the army in PvP. 0 = no limit. */
+  pvpTimeLimit: 60,
+  /** Seconds to choose and place the army against the AI. 0 = no limit. */
+  aiTimeLimit: 0,
+  /** Starting unit counts on the setup screen (must add up to the army size). */
+  defaultCounts: { swordsman: 6, spearman: 4, horseman: 3, archer: 6, medic: 3, mage: 2, king: 1 } as Record<
+    UnitType,
+    number
+  >,
+  /** When time runs out, missing units are filled with this type. */
+  autoFillType: 'swordsman' as UnitType,
 };
 
 /** Map defaults. */

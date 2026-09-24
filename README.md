@@ -3,7 +3,14 @@
 A 2D auto-battle strategy game. Two armies of 25 units are placed secretly, then fight
 automatically for up to 90 seconds. Built with **Phaser 3**, **Vite** and **TypeScript**.
 
-**Current status: Phase 1**: simulation core plus a watchable test battle on Open Plains.
+**Current status: Phase 1 + King + army setup screen.**
+
+- **King:** every army has exactly 1 King (part of the 25). If your King dies, you lose immediately.
+  Units defend their own King when enemies get close and hunt the enemy King when it's within reach.
+- **Army setup:** Step 1 picks how many of each unit (+/−, total 25); Step 2 places them by
+  tapping or dragging in your deployment zone, with stances, Auto-place, Save/Load.
+  PvP gives you 60 seconds (missing units are auto-filled when time runs out); vs AI has no limit.
+- The opponent is a fixed practice army until the AI (Phase 5) and online PvP (Phase 8) are built.
 
 ## Getting started
 
@@ -40,6 +47,9 @@ src/
     rng.ts               Seeded random generator (mulberry32)
     army.ts              Army validation (25 units, caps, deployment zone)
   data/                  Maps and the hard-coded Phase 1 test armies
+  game/armyDraft.ts      Army being built on the setup screen: counts, auto-place, presets
+  scenes/MenuScene.ts    Start menu
+  scenes/SetupScene.ts   Army setup: counts, then placement (timer in PvP)
   scenes/BattleScene.ts  Phaser: draws the battle, HUD, effects, results
   ui/                    Layout constants and the touch-friendly button
 tests/                   Automated tests (Vitest)

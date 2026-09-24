@@ -18,6 +18,10 @@ export function validateArmy(setup: ArmySetup, team: Team, map: MapDef): string[
     const count = units.filter((u) => u.type === type).length;
     const max = ARMY_RULES.maxPerType[type];
     if (count > max) errors.push(`Too many ${UNITS[type].name}s: ${count} (max ${max}).`);
+    const required = ARMY_RULES.required[type];
+    if (required !== undefined && count !== required) {
+      errors.push(`Army needs exactly ${required} ${UNITS[type].name} (has ${count}).`);
+    }
   }
   const [minX, maxX] = deployColumns(team, map);
   const used = new Set<string>();

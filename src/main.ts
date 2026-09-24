@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import { BattleScene } from './scenes/BattleScene';
+import { MenuScene } from './scenes/MenuScene';
+import { SetupScene } from './scenes/SetupScene';
 import { GAME_H, GAME_W } from './ui/layout';
 
 new Phaser.Game({
@@ -14,5 +16,6 @@ new Phaser.Game({
     height: GAME_H,
   },
   input: { activePointers: 2 },
-  scene: [BattleScene],
+  // The first scene in the list starts automatically.
+  scene: [MenuScene, SetupScene, BattleScene],
 });

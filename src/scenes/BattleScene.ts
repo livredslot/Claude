@@ -3,11 +3,12 @@
  * All game logic lives in src/sim; this scene only reads the battle state.
  */
 import Phaser from 'phaser';
-import { ARMY_RULES, UNIT_TYPES, UNITS, type UnitType } from '../config/gameConfig';
+import { ARMY_RULES, UNIT_TYPES, UNITS } from '../config/gameConfig';
 import { OPEN_PLAINS } from '../data/maps';
 import { TEST_ARMY_BLUE, TEST_ARMY_RED } from '../data/testArmies';
-import { Battle, SIM_CONSTANTS, SUB, type BattleEvent, type BattleRecord, type Unit } from '../sim';
+import { Battle, SIM_CONSTANTS, SUB, type ArmySetup, type BattleEvent, type BattleRecord, type Unit } from '../sim';
 import { makeButton, type Button } from '../ui/button';
+import { drawUnitShape, ensureUnitTextures, unitTextureKey } from '../ui/unitShapes';
 import {
   FONT,
   GAME_H,
@@ -43,6 +44,13 @@ function sy(y: number): number {
   return MAP_Y + (y / SUB) * TILE_PX;
 }
 
+export interface BattleStartData {
+  setups?: [ArmySetup, ArmySetup];
+  seed?: number;
+  /** Where "Change army" goes back to (the setup screen), with its settings. */
+  setupData?: object;
+}
+
 export class BattleScene extends Phaser.Scene {
   private record!: BattleRecord;
   private battle!: Battle;
@@ -68,9 +76,14 @@ export class BattleScene extends Phaser.Scene {
     super('Battle');
   }
 
-  init(data: { seed?: number }): void {
-    const seed = data.seed ?? Math.floor(Math.random() * 0xffffffff) >>> 0;
-    this.record = { mapId: OPEN_PLAINS.id, seed, setups: [TEST_ARMY_BLUE, TEST_ARMY_RED] };
+  /** Data passed from the setup screen. Without it, the built-in test armies fight. */
+  private startData: BattleStartData = {};
+
+  init(data: BattleStartData): void {
+    this.startData = data ?? {};
+    const seed = data?.seed ?? Math.floor(Math.random() * 0xffffffff) >>> 0;
+    const setups = data?.setups ?? [TEST_ARMY_BLUE, TEST_ARMY_RED];
+    this.record = { mapId: OPEN_PLAINS.id, seed, setups };
     this.accumulator = 0;
     this.effects = [];
     this.resultShown = false;
@@ -82,9 +95,9 @@ export class BattleScene extends Phaser.Scene {
 
     this.drawMap();
     this.drawLegend();
-    this.createUnitTextures();
+    ensureUnitTextures(this);
     this.gUnits = this.add.graphics();
-    this.sprites = this.battle.units.map((u) => this.add.image(0, 0, `unit-${u.type}-${u.team}`));
+    this.sprites = this.battle.units.map((u) => this.add.image(0, 0, unitTextureKey(u.type, u.team)));
     this.gBars = this.add.graphics();
     this.gFx = this.add.graphics();
     this.gHud = this.add.graphics();
@@ -129,11 +142,11 @@ export class BattleScene extends Phaser.Scene {
     const y = GAME_H - LEGEND_H;
     const g = this.add.graphics();
     g.fillStyle(0x1e293b, 1).fillRect(0, y, GAME_W, LEGEND_H);
-    const itemW = 190;
+    const itemW = 170;
     const startX = (GAME_W - itemW * UNIT_TYPES.length) / 2;
     UNIT_TYPES.forEach((type, i) => {
       const x = startX + i * itemW + 20;
-      this.drawUnitShape(g, type, x, y + LEGEND_H / 2, 0x94a3b8, 0xe2e8f0, 1);
+      drawUnitShape(g, type, x, y + LEGEND_H / 2, 0x94a3b8, 0xe2e8f0);
       this.add
         .text(x + 20, y + LEGEND_H / 2, UNITS[type].name, { fontFamily: FONT, fontSize: '18px', color: '#e2e8f0' })
         .setOrigin(0, 0.5);
@@ -160,7 +173,7 @@ export class BattleScene extends Phaser.Scene {
       .text(GAME_W / 2, 84, 'Army value', { fontFamily: FONT, fontSize: '13px', color: '#94a3b8' })
       .setOrigin(0.5, 0.5);
 
-    makeButton(this, 16, 22, 150, 56, 'New battle', () => this.scene.restart({}));
+    makeButton(this, 16, 22, 150, 56, 'Menu', () => this.scene.start('Menu'));
     this.add.text(16, 90, `Seed ${this.record.seed}`, { fontFamily: FONT, fontSize: '12px', color: '#64748b' }).setOrigin(0, 0.5);
 
     this.speedButton = makeButton(this, 996, 22, 130, 56, `Speed ${this.speed}×`, () => {
@@ -227,85 +240,6 @@ export class BattleScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   // Units
   // ------------------------------------------------------------------
-
-  /**
-   * Draw each unit shape once into a texture; sprites are much cheaper to draw
-   * every frame than re-building polygons (important on phones).
-   */
-  private createUnitTextures(): void {
-    const size = 32;
-    for (const type of UNIT_TYPES) {
-      for (const team of [0, 1] as const) {
-        const key = `unit-${type}-${team}`;
-        if (this.textures.exists(key)) continue;
-        const g = this.make.graphics({}, false);
-        this.drawUnitShape(g, type, size / 2, size / 2, TEAM_COLORS[team], 0xffffff, 1);
-        g.generateTexture(key, size, size);
-        g.destroy();
-      }
-    }
-  }
-
-  private drawUnitShape(
-    g: Phaser.GameObjects.Graphics,
-    type: UnitType,
-    x: number,
-    y: number,
-    fill: number,
-    stroke: number,
-    alpha: number,
-  ): void {
-    const r = 11;
-    g.fillStyle(fill, alpha);
-    g.lineStyle(2, stroke, alpha);
-    switch (type) {
-      case 'swordsman': // square
-        g.fillRect(x - r, y - r, r * 2, r * 2);
-        g.strokeRect(x - r, y - r, r * 2, r * 2);
-        break;
-      case 'spearman': {
-        // triangle
-        const pts = [new Phaser.Math.Vector2(x, y - r - 2), new Phaser.Math.Vector2(x + r + 1, y + r), new Phaser.Math.Vector2(x - r - 1, y + r)];
-        g.fillPoints(pts, true);
-        g.strokePoints(pts, true);
-        break;
-      }
-      case 'horseman': {
-        // diamond
-        const d = r + 3;
-        const pts = [new Phaser.Math.Vector2(x, y - d), new Phaser.Math.Vector2(x + d, y), new Phaser.Math.Vector2(x, y + d), new Phaser.Math.Vector2(x - d, y)];
-        g.fillPoints(pts, true);
-        g.strokePoints(pts, true);
-        break;
-      }
-      case 'archer': // circle
-        g.fillCircle(x, y, r);
-        g.strokeCircle(x, y, r);
-        break;
-      case 'medic': {
-        // plus sign
-        const a = 4;
-        const pts = [
-          [-a, -r], [a, -r], [a, -a], [r, -a], [r, a], [a, a], [a, r], [-a, r], [-a, a], [-r, a], [-r, -a], [-a, -a],
-        ].map(([px, py]) => new Phaser.Math.Vector2(x + px, y + py));
-        g.fillPoints(pts, true);
-        g.strokePoints(pts, true);
-        break;
-      }
-      case 'mage': {
-        // five-pointed star
-        const pts: Phaser.Math.Vector2[] = [];
-        for (let i = 0; i < 10; i++) {
-          const ang = -Math.PI / 2 + (i * Math.PI) / 5;
-          const rad = i % 2 === 0 ? r + 3 : r / 2;
-          pts.push(new Phaser.Math.Vector2(x + Math.cos(ang) * rad, y + Math.sin(ang) * rad));
-        }
-        g.fillPoints(pts, true);
-        g.strokePoints(pts, true);
-        break;
-      }
-    }
-  }
 
   private drawUnits(alpha: number): void {
     const g = this.gUnits;
@@ -517,7 +451,7 @@ export class BattleScene extends Phaser.Scene {
   private showResult(): void {
     const r = this.battle.result!;
     const w = 720;
-    const h = 500;
+    const h = 560;
     const x0 = (GAME_W - w) / 2;
     const y0 = (GAME_H - h) / 2;
     const panel = this.add.container(0, 0).setDepth(20);
@@ -530,8 +464,13 @@ export class BattleScene extends Phaser.Scene {
       r.winner === null ? 'DRAW' : `${TEAM_NAMES[r.winner].toUpperCase()} WINS`;
     const titleColor = r.winner === null ? '#f8fafc' : r.winner === 0 ? '#93c5fd' : '#fca5a5';
     const secs = (r.tick / 20).toFixed(1);
+    const loser = r.winner === null ? 'Both' : TEAM_NAMES[r.winner === 0 ? 1 : 0];
     const reason =
-      r.reason === 'annihilation'
+      r.reason === 'king'
+        ? r.winner === null
+          ? `Both Kings fell at the same moment (${secs} s)`
+          : `${loser}'s King has fallen after ${secs} s`
+        : r.reason === 'annihilation'
         ? `All enemy units defeated after ${secs} s`
         : `Time's up — higher remaining army value (${(r.values[0] / 1000).toFixed(2)} vs ${(r.values[1] / 1000).toFixed(2)})`;
 
@@ -562,11 +501,22 @@ export class BattleScene extends Phaser.Scene {
         .setOrigin(0.5, 0),
     );
 
-    const seed = this.record.seed;
-    const replay = makeButton(this, GAME_W / 2 - 250, y0 + h - 80, 240, 60, 'Watch replay', () =>
-      this.scene.restart({ seed }),
+    const { seed, setups } = this.record;
+    const setupData = this.startData.setupData;
+    const bw = 210;
+    const gap = 16;
+    const bx = GAME_W / 2 - (bw * 3 + gap * 2) / 2;
+    const by = y0 + h - 80;
+    const replay = makeButton(this, bx, by, bw, 60, 'Watch replay', () =>
+      this.scene.restart({ ...this.startData, seed, setups }),
     );
-    const again = makeButton(this, GAME_W / 2 + 10, y0 + h - 80, 240, 60, 'New battle', () => this.scene.restart({}));
+    const again = makeButton(this, bx + bw + gap, by, bw, 60, 'Rematch', () =>
+      this.scene.restart({ ...this.startData, seed: undefined, setups }),
+    );
+    const change = makeButton(this, bx + 2 * (bw + gap), by, bw, 60, setupData ? 'Change army' : 'Menu', () =>
+      setupData ? this.scene.start('Setup', setupData) : this.scene.start('Menu'),
+    );
+    panel.add(change.container);
     panel.add([replay.container, again.container]);
   }
 }

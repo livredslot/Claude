@@ -1,6 +1,6 @@
 /**
- * Hard-coded armies used in Phase 1 to watch a battle and to run the
- * determinism test. (Phase 2 replaces these with the deployment screen.)
+ * Hard-coded armies used by the tests, and Red is the opponent on the
+ * army setup screen until the AI arrives in Phase 5.
  */
 import type { ArmySetup, Stance, UnitPlacement, UnitType } from '../sim/types';
 
@@ -14,9 +14,10 @@ export const TEST_ARMY_BLUE: ArmySetup = {
     ...column('swordsman', 5, [4, 5, 6, 12, 13, 14]),
     ...column('spearman', 5, [7, 8, 9, 10, 11]),
     ...column('horseman', 4, [2, 3, 16], 'flank'),
-    ...column('archer', 3, [6, 7, 8, 9, 10, 11]),
+    ...column('archer', 3, [6, 7, 8, 9, 10]),
     ...column('medic', 2, [7, 9, 11]),
     ...column('mage', 1, [8, 10]),
+    ...column('king', 1, [9]),
   ],
 };
 
@@ -26,8 +27,9 @@ export const TEST_ARMY_RED: ArmySetup = {
     ...column('swordsman', 34, [5, 6, 7, 8, 9, 10, 11]),
     ...column('spearman', 34, [4, 12, 13, 14]),
     ...column('horseman', 35, [2, 17, 18]),
-    ...column('archer', 36, [6, 7, 8, 9, 10, 11]),
+    ...column('archer', 36, [6, 7, 8, 9, 10]),
     ...column('medic', 37, [7, 9, 11]),
     ...column('mage', 38, [8, 11]),
+    ...column('king', 38, [9]),
   ],
 };

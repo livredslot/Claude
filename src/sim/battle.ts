@@ -56,6 +56,9 @@ export interface Unit {
   flankPhase: 0 | 1 | 2;
   /** Which map edge (y in sub-tiles) the flanker uses. */
   flankEdgeY: number;
+  /** Starting position (the King stays near it). */
+  readonly homeX: number;
+  readonly homeY: number;
   lastAttackerId: number;
   lastAttackedTick: number;
   /** Medic: who it is healing this tick, or -1. */
@@ -115,6 +118,8 @@ export class Battle {
     emptyByType(),
   ];
 
+  /** Unit ID of each team's King, or -1 if the army has none. */
+  readonly kingIds: [number, number] = [-1, -1];
   private readonly rng: Rng;
   private readonly widthSub: number;
   private readonly heightSub: number;
@@ -141,6 +146,7 @@ export class Battle {
   private addUnit(team: Team, p: UnitPlacement): void {
     const id = this.units.length;
     const stats = STATS[p.type];
+    if (p.type === 'king' && this.kingIds[team] < 0) this.kingIds[team] = id;
     const y = p.ty * SUB + SUB / 2;
     this.units.push({
       id,
@@ -162,6 +168,8 @@ export class Battle {
       holdReleased: false,
       flankPhase: 0,
       flankEdgeY: y < this.heightSub / 2 ? C.flankEdgeOffset : this.heightSub - C.flankEdgeOffset,
+      homeX: p.tx * SUB + SUB / 2,
+      homeY: y,
       lastAttackerId: -1,
       lastAttackedTick: -1000,
       healTargetId: -1,
@@ -232,6 +240,30 @@ export class Battle {
   }
 
   private chooseTarget(u: Unit): number {
+    if (u.type === 'king') {
+      // The King only fights enemies that come close.
+      return this.nearestEnemy(u, undefined, C.kingEngageSq);
+    }
+
+    // 1. Defend: an enemy near our King that we can reach quickly.
+    const myKing = this.king(u.team);
+    if (myKing) {
+      const t = this.nearestEnemy(
+        u,
+        (e) => dist2(e.x, e.y, myKing.x, myKing.y) <= C.kingGuardSq,
+        C.kingGuardResponseSq,
+      );
+      if (t >= 0) return t;
+    }
+
+    // 2. Hunt: the enemy King, when it is within reach.
+    const enemyKing = this.king(u.team === 0 ? 1 : 0);
+    if (enemyKing) {
+      const huntSq = u.type === 'horseman' ? C.kingHorsemanHuntSq : C.kingHuntSq;
+      if (dist2(u.x, u.y, enemyKing.x, enemyKing.y) <= huntSq) return enemyKing.id;
+    }
+
+    // 3. Normal targeting rules per unit type.
     if (u.type === 'horseman') {
       const t = this.nearestEnemy(
         u,
@@ -262,6 +294,12 @@ export class Battle {
     return best;
   }
 
+  /** The team's living King, or null. */
+  king(team: Team): Unit | null {
+    const id = this.kingIds[team];
+    return id >= 0 && this.units[id].alive ? this.units[id] : null;
+  }
+
   private anyEnemyWithin(u: Unit, distSq: number): boolean {
     for (const e of this.units) {
       if (e.alive && e.team !== u.team && dist2(u.x, u.y, e.x, e.y) <= distSq) return true;
@@ -282,6 +320,10 @@ export class Battle {
 
     if (u.type === 'medic') {
       this.actMedic(u);
+      return;
+    }
+    if (u.type === 'king') {
+      this.actKing(u);
       return;
     }
 
@@ -359,6 +401,23 @@ export class Battle {
     this.pendingDamage.push({ target: t.id, amount: dmg, melee, source: u.id });
     this.events.push({ kind: melee ? 'melee' : 'arrow', from: u.id, to: t.id });
     u.cooldown = u.stats.attackTicks;
+  }
+
+  // ---- King ----
+
+  private actKing(u: Unit): void {
+    const t = u.targetId >= 0 ? this.units[u.targetId] : null;
+    if (t && t.alive && dist2(u.x, u.y, t.x, t.y) <= C.kingEngageSq) {
+      if (this.inRange(u, t)) {
+        this.face(u, t.x - u.x, t.y - u.y);
+        if (this.readyToAttack(u)) this.attack(u, t);
+      } else {
+        this.moveToward(u, t.x, t.y);
+      }
+      return;
+    }
+    // No enemy close: walk back to the starting tile if pushed/drawn away.
+    if (dist2(u.x, u.y, u.homeX, u.homeY) > C.kingHomeSlackSq) this.moveToward(u, u.homeX, u.homeY);
   }
 
   // ---- Mage ----
@@ -639,9 +698,14 @@ export class Battle {
   private checkEnd(): void {
     const a0 = this.aliveCount(0);
     const a1 = this.aliveCount(1);
+    // A team whose King has fallen loses immediately (like checkmate).
+    const kingDead = [0, 1].map((t) => this.kingIds[t] >= 0 && !this.units[this.kingIds[t]].alive);
     let winner: Team | null;
     let reason: BattleResult['reason'];
-    if (a0 === 0 || a1 === 0) {
+    if (kingDead[0] || kingDead[1]) {
+      reason = 'king';
+      winner = kingDead[0] && kingDead[1] ? null : kingDead[0] ? 1 : 0;
+    } else if (a0 === 0 || a1 === 0) {
       reason = 'annihilation';
       winner = a0 === 0 && a1 === 0 ? null : a0 === 0 ? 1 : 0;
     } else if (this.tick >= C.maxTicks) {

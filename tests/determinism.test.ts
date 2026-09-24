@@ -64,11 +64,35 @@ describe('determinism', () => {
 });
 
 describe('battle rules', () => {
+  it('losing your King loses the battle immediately', () => {
+    for (let seed = 1; seed <= 10; seed++) {
+      const b = new Battle(OPEN_PLAINS, SETUPS, seed);
+      while (!b.result) {
+        b.step();
+        const k0 = b.units[b.kingIds[0]].alive;
+        const k1 = b.units[b.kingIds[1]].alive;
+        if (!k0 || !k1) {
+          expect(b.result).not.toBeNull();
+          expect(b.result!.reason).toBe('king');
+          expect(b.result!.winner).toBe(!k0 && !k1 ? null : k0 ? 0 : 1);
+        }
+      }
+    }
+  });
+
+  it('armies without exactly one King are rejected', () => {
+    const noKing = { units: TEST_ARMY_BLUE.units.map((u) => (u.type === 'king' ? { ...u, type: 'archer' as const } : u)) };
+    expect(validateArmy(noKing, 0, OPEN_PLAINS).join()).toMatch(/King/);
+  });
+
   it('always ends within 90 seconds (1800 ticks) with a valid result', () => {
     for (let seed = 1; seed <= 10; seed++) {
       const r = simulateBattle(OPEN_PLAINS, SETUPS, seed);
       expect(r.tick).toBeLessThanOrEqual(1800);
-      if (r.reason === 'annihilation') {
+      if (r.reason === 'king') {
+        // Only ends early; the loser's King is dead.
+        expect(r.tick).toBeLessThanOrEqual(1800);
+      } else if (r.reason === 'annihilation') {
         expect(r.winner === null ? 0 : r.unitsLost[r.winner === 0 ? 1 : 0]).toBe(r.winner === null ? 0 : 25);
       } else {
         expect(r.tick).toBe(1800);
