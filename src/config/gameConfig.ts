@@ -50,7 +50,7 @@ export interface UnitStats {
 export const UNITS: Record<UnitType, UnitStats> = {
   swordsman: { name: 'Swordsman', hp: 120, damage: 15, attackInterval: 1.0, range: 1.0, speed: 1.0, value: 2, ranged: false },
   spearman: { name: 'Spearman', hp: 110, damage: 12, attackInterval: 1.2, range: 1.5, speed: 0.9, value: 2, ranged: false },
-  horseman: { name: 'Horseman', hp: 100, damage: 18, attackInterval: 1.2, range: 1.0, speed: 1.5, value: 3, ranged: false },
+  horseman: { name: 'Horseman', hp: 100, damage: 18, attackInterval: 1.2, range: 1.0, speed: 1.7, value: 3, ranged: false },
   archer: { name: 'Archer', hp: 60, damage: 10, attackInterval: 1.5, range: 6.0, speed: 1.0, value: 2, ranged: true },
   medic: { name: 'Medic', hp: 70, damage: 3, attackInterval: 1.0, range: 1.0, speed: 1.1, value: 2, ranged: false },
   mage: { name: 'Mage', hp: 50, damage: 20, attackInterval: 3.0, range: 5.0, speed: 0.9, value: 3, ranged: true },
@@ -98,6 +98,17 @@ export const UNIT_RULES = {
   medicFightBackWindow: 2,
   /** Mage area-of-effect radius in tiles. */
   mageAreaRadius: 1.5,
+};
+
+/**
+ * Fighting back: a unit that is attacked goes after its attacker before its
+ * normal priorities (only the player's orders come first).
+ */
+export const RETALIATION_RULES = {
+  /** A unit remembers who hit it for this many seconds. */
+  memorySeconds: 2,
+  /** Also chase Archers and Mages that hit from a distance? */
+  againstRanged: true,
 };
 
 /** Stance rules. */

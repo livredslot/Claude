@@ -133,6 +133,8 @@ export class Battle {
   private readonly heightSub: number;
   private pendingDamage: PendingDamage[] = [];
   private pendingHeal: { target: number; amount: number }[] = [];
+  /** hitTick[victim * n + attacker] = last tick the attacker damaged the victim. */
+  private hitTick: Int32Array = new Int32Array(0);
 
   constructor(map: MapDef, setups: [ArmySetup, ArmySetup], seed: number) {
     this.map = map;
@@ -149,6 +151,7 @@ export class Battle {
         if (p) this.addUnit(team, p);
       }
     }
+    this.hitTick = new Int32Array(this.units.length * this.units.length).fill(-1_000_000);
   }
 
   private addUnit(team: Team, p: UnitPlacement): void {
@@ -290,15 +293,20 @@ export class Battle {
 
   private chooseTarget(u: Unit): number {
     if (u.type === 'king') {
-      // The King only fights enemies that come close.
-      return this.nearestEnemy(u, undefined, C.kingEngageSq);
+      // The King only fights enemies that come close; its own attackers first.
+      const back = this.retaliationTarget(u, C.kingEngageSq);
+      return back >= 0 ? back : this.nearestEnemy(u, undefined, C.kingEngageSq);
     }
 
     // 0. Player orders: a focused enemy, or the enemy King in 'king' mode.
     const ordered = this.orderedTarget(u.team);
     if (ordered) return ordered.id;
 
-    // 1. Defend: an enemy near our King that we can reach quickly.
+    // 1. Fight back against whoever is attacking this unit.
+    const back = this.retaliationTarget(u);
+    if (back >= 0) return back;
+
+    // 2. Defend: an enemy near our King that we can reach quickly.
     const myKing = this.king(u.team);
     if (myKing) {
       const t = this.nearestEnemy(
@@ -309,7 +317,7 @@ export class Battle {
       if (t >= 0) return t;
     }
 
-    // 2. Normal targeting rules per unit type. (Units only go for the enemy King
+    // 3. Normal targeting rules per unit type. (Units only go for the enemy King
     //    on the player's 'Attack King' order, or when it is simply the nearest enemy.)
     if (u.type === 'horseman') {
       const t = this.nearestEnemy(
@@ -339,6 +347,27 @@ export class Battle {
       }
     }
     return best;
+  }
+
+  /** Did `attacker` damage `victim` recently? */
+  private recentlyHitBy(victim: Unit, attacker: Unit): boolean {
+    return this.tick - this.hitTick[victim.id * this.units.length + attacker.id] <= C.retaliationTicks;
+  }
+
+  /**
+   * An enemy that attacked `u` recently: keep the current target if it is one of
+   * them, otherwise the nearest attacker. Returns -1 if nobody is attacking.
+   */
+  private retaliationTarget(u: Unit, maxDistSq = Infinity): number {
+    const current = u.targetId >= 0 ? this.units[u.targetId] : null;
+    if (current && current.alive && this.recentlyHitBy(u, current) && dist2(u.x, u.y, current.x, current.y) <= maxDistSq) {
+      return current.id;
+    }
+    return this.nearestEnemy(
+      u,
+      (e) => this.recentlyHitBy(u, e) && (C.retaliateAgainstRanged || !e.stats.ranged),
+      maxDistSq,
+    );
   }
 
   /** The team's living King, or null. */
@@ -791,6 +820,10 @@ export class Battle {
       this.damageByType[src.team][src.type] += Math.min(p.amount, t.hp);
       t.hp -= p.amount;
       t.lastAttackerId = src.id;
+      // Remember who hit whom; a unit hit by a new attacker re-thinks its target next tick.
+      const n = this.units.length;
+      if (!this.recentlyHitBy(t, src) && t.targetId !== src.id) t.retargetIn = 0;
+      this.hitTick[t.id * n + src.id] = this.tick;
       t.lastAttackedTick = this.tick;
       // Melee damage interrupts a Mage's cast; it must start over.
       if (p.melee && t.type === 'mage' && t.castProgress > 0) {

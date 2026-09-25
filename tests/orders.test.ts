@@ -100,3 +100,41 @@ describe('movement and followers', () => {
     }
   });
 });
+
+describe('fighting back', () => {
+  it('a unit hit by an Archer goes after that Archer instead of the nearest enemy', () => {
+    const blue: ArmySetup = { units: [{ type: 'swordsman', tx: 5, ty: 10 }] };
+    // The Red Swordsman is nearer (5 tiles) than the Archer (~5.4 tiles), but the Archer shoots first.
+    const red: ArmySetup = {
+      units: [
+        { type: 'swordsman', tx: 10, ty: 10 },
+        { type: 'archer', tx: 10, ty: 12 },
+      ],
+    };
+    const b = new Battle(OPEN_PLAINS, [blue, red], 1);
+    const sword = b.units.find((u) => u.team === 0)!;
+    const archer = b.units.find((u) => u.type === 'archer')!;
+    b.step();
+    expect(sword.targetId).not.toBe(archer.id); // nearest enemy at first
+    while (!b.events.some((e) => e.kind === 'arrow')) b.step();
+    b.step();
+    b.step();
+    expect(sword.targetId).toBe(archer.id);
+  });
+
+  it("the player's focus order still comes first", () => {
+    const blue: ArmySetup = { units: [{ type: 'swordsman', tx: 5, ty: 10 }] };
+    const red: ArmySetup = {
+      units: [
+        { type: 'swordsman', tx: 10, ty: 10 },
+        { type: 'archer', tx: 10, ty: 12 },
+      ],
+    };
+    const b = new Battle(OPEN_PLAINS, [blue, red], 1);
+    const sword = b.units.find((u) => u.team === 0)!;
+    const redSword = b.units.find((u) => u.team === 1 && u.type === 'swordsman')!;
+    b.issueCommand(0, { kind: 'focus', target: redSword.id });
+    for (let i = 0; i < 40; i++) b.step();
+    expect(sword.targetId).toBe(redSword.id);
+  });
+});
