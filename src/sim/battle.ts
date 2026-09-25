@@ -17,6 +17,9 @@ import { Rng } from './rng';
 import { ARMY_RULES, UNIT_TYPES } from '../config/gameConfig';
 import type {
   ArmySetup,
+  AttackMode,
+  BattleCommand,
+  RecordedCommand,
   BattleEvent,
   BattleResult,
   MapDef,
@@ -56,14 +59,13 @@ export interface Unit {
   flankPhase: 0 | 1 | 2;
   /** Which map edge (y in sub-tiles) the flanker uses. */
   flankEdgeY: number;
-  /** Starting position (the King stays near it). */
-  readonly homeX: number;
-  readonly homeY: number;
   lastAttackerId: number;
   lastAttackedTick: number;
   /** Medic: who it is healing this tick, or -1. */
   healTargetId: number;
   healersThisTick: number;
+  /** Did the unit walk this tick? (Walking allies pass through each other.) */
+  moved: boolean;
 }
 
 interface PendingDamage {
@@ -120,6 +122,12 @@ export class Battle {
 
   /** Unit ID of each team's King, or -1 if the army has none. */
   readonly kingIds: [number, number] = [-1, -1];
+  /** Current attack order per team. */
+  readonly modes: [AttackMode, AttackMode] = ['auto', 'auto'];
+  /** Enemy unit each team is focusing on, or -1. */
+  readonly focus: [number, number] = [-1, -1];
+  /** Every order given so far, for replays and (later) sending to the other player. */
+  readonly commandLog: RecordedCommand[] = [];
   private readonly rng: Rng;
   private readonly widthSub: number;
   private readonly heightSub: number;
@@ -168,12 +176,11 @@ export class Battle {
       holdReleased: false,
       flankPhase: 0,
       flankEdgeY: y < this.heightSub / 2 ? C.flankEdgeOffset : this.heightSub - C.flankEdgeOffset,
-      homeX: p.tx * SUB + SUB / 2,
-      homeY: y,
       lastAttackerId: -1,
       lastAttackedTick: -1000,
       healTargetId: -1,
       healersThisTick: 0,
+      moved: false,
     });
   }
 
@@ -184,6 +191,46 @@ export class Battle {
   /** +1 for Blue (moves right), −1 for Red (moves left). */
   private forward(team: Team): number {
     return team === 0 ? 1 : -1;
+  }
+
+  // ------------------------------------------------------------------
+  // Player orders
+  // ------------------------------------------------------------------
+
+  /**
+   * Give an order. It takes effect from the next step() and is recorded (with
+   * the current tick) so a replay can re-issue it at exactly the same moment.
+   * Returns false if the order is invalid (e.g. focusing a dead or friendly unit).
+   */
+  issueCommand(team: Team, command: BattleCommand): boolean {
+    if (this.result) return false;
+    if (command.kind === 'focus' && command.target >= 0) {
+      const t = this.units[command.target];
+      if (!t || !t.alive || t.team === team) return false;
+    }
+    if (command.kind === 'mode') this.modes[team] = command.mode;
+    else this.focus[team] = command.target;
+    this.commandLog.push({ tick: this.tick, team, command: { ...command } });
+
+    const attacking = this.focus[team] >= 0 || this.modes[team] === 'king';
+    for (const u of this.units) {
+      if (u.team !== team) continue;
+      u.retargetIn = 0; // re-think targets on the next tick
+      if (attacking) {
+        // A direct order overrides Hold and Flank stances.
+        u.holdReleased = true;
+        u.flankPhase = 2;
+      }
+    }
+    return true;
+  }
+
+  /** The enemy the team's orders point at (focus first, then the King in 'king' mode), or null. */
+  private orderedTarget(team: Team): Unit | null {
+    const f = this.focus[team];
+    if (f >= 0 && this.units[f].alive) return this.units[f];
+    if (this.modes[team] === 'king') return this.king(team === 0 ? 1 : 0);
+    return null;
   }
 
   // ------------------------------------------------------------------
@@ -201,6 +248,7 @@ export class Battle {
     for (const u of units) {
       u.healersThisTick = 0;
       u.healTargetId = -1;
+      u.moved = false;
     }
 
     for (const u of units) if (u.alive) this.updateTarget(u);
@@ -215,6 +263,7 @@ export class Battle {
       if (u.alive) this.act(u);
     }
 
+    this.separateAllies();
     this.resolve();
     this.checkEnd();
   }
@@ -244,6 +293,10 @@ export class Battle {
       // The King only fights enemies that come close.
       return this.nearestEnemy(u, undefined, C.kingEngageSq);
     }
+
+    // 0. Player orders: a focused enemy, or the enemy King in 'king' mode.
+    const ordered = this.orderedTarget(u.team);
+    if (ordered) return ordered.id;
 
     // 1. Defend: an enemy near our King that we can reach quickly.
     const myKing = this.king(u.team);
@@ -416,14 +469,47 @@ export class Battle {
       }
       return;
     }
-    // No enemy close: walk back to the starting tile if pushed/drawn away.
-    if (dist2(u.x, u.y, u.homeX, u.homeY) > C.kingHomeSlackSq) this.moveToward(u, u.homeX, u.homeY);
+    const centre = this.armyCentre(u.team);
+    if (!centre) {
+      // The King is the last fighter left: it has to attack.
+      const id = this.nearestEnemy(u);
+      if (id < 0) return;
+      const e = this.units[id];
+      if (this.inRange(u, e)) {
+        this.face(u, e.x - u.x, e.y - u.y);
+        if (this.readyToAttack(u)) this.attack(u, e);
+      } else {
+        this.moveToward(u, e.x, e.y);
+      }
+      return;
+    }
+    // Follow the army, staying a few tiles behind its centre.
+    const gx = centre.x - this.forward(u.team) * C.kingBehind;
+    const gy = centre.y;
+    if (dist2(u.x, u.y, gx, gy) > C.kingFollowSlackSq) this.moveToward(u, gx, gy);
+  }
+
+  /** Average position of a team's living fighters (not the King, not Medics), or null. */
+  private armyCentre(team: Team): { x: number; y: number } | null {
+    let sx = 0;
+    let sy = 0;
+    let n = 0;
+    for (const a of this.units) {
+      if (!a.alive || a.team !== team || a.type === 'medic' || a.type === 'king') continue;
+      sx += a.x;
+      sy += a.y;
+      n++;
+    }
+    return n ? { x: Math.trunc(sx / n), y: Math.trunc(sy / n) } : null;
   }
 
   // ---- Mage ----
 
   private actMage(u: Unit, t: Unit): void {
-    if (this.anyEnemyWithin(u, u.stats.rangeSq)) {
+    // With an order, walk until the ordered target itself is in range.
+    const ordered = this.orderedTarget(u.team);
+    const canCast = ordered ? this.inRange(u, ordered) : this.anyEnemyWithin(u, u.stats.rangeSq);
+    if (canCast) {
       this.progressCast(u);
     } else {
       // Moving cancels the cast.
@@ -437,7 +523,8 @@ export class Battle {
     u.castProgress++;
     if (u.castProgress < u.stats.attackTicks) return;
     u.castProgress = 0;
-    const center = this.bestCastPoint(u);
+    const ordered = this.orderedTarget(u.team);
+    const center = ordered && this.inRange(u, ordered) ? { x: ordered.x, y: ordered.y } : this.bestCastPoint(u);
     if (!center) return;
     this.face(u, center.x - u.x, center.y - u.y);
     for (const e of this.units) {
@@ -491,8 +578,10 @@ export class Battle {
       return;
     }
 
-    // 3. Move: toward injured allies nearby, otherwise follow the army; stay behind the front line.
-    const follow = this.lowestHpAlly(u, C.medicSeekRangeSq, false) ?? this.nearestFighterAlly(u);
+    // 3. Move: toward injured fighters nearby, otherwise follow the centre of the army
+    //    (not the King); always stay behind the front line.
+    const follow =
+      this.lowestHpAlly(u, C.medicSeekRangeSq, false, true) ?? this.armyCentre(u.team) ?? this.nearestFighterAlly(u);
     if (!follow) return;
     const fwd = this.forward(u.team);
     let gx = follow.x - fwd * C.medicBehind;
@@ -508,10 +597,11 @@ export class Battle {
   }
 
   /** Injured ally (not self) with the lowest HP%, within range. */
-  private lowestHpAlly(u: Unit, distSq: number, respectHealerCap: boolean): Unit | null {
+  private lowestHpAlly(u: Unit, distSq: number, respectHealerCap: boolean, fightersOnly = false): Unit | null {
     let best: Unit | null = null;
     for (const a of this.units) {
       if (!a.alive || a.team !== u.team || a.id === u.id) continue;
+      if (fightersOnly && (a.type === 'king' || a.type === 'medic')) continue;
       if (a.hp >= a.stats.maxHp) continue;
       if (respectHealerCap && a.healersThisTick >= C.maxMedicsPerTarget) continue;
       if (dist2(u.x, u.y, a.x, a.y) > distSq) continue;
@@ -535,12 +625,12 @@ export class Battle {
     return best;
   }
 
-  /** X of the most forward living non-medic ally. */
+  /** X of the most forward living fighter (not Medics or the King). */
   private frontLineX(team: Team): number | null {
     let front: number | null = null;
     const fwd = this.forward(team);
     for (const a of this.units) {
-      if (!a.alive || a.team !== team || a.type === 'medic') continue;
+      if (!a.alive || a.team !== team || a.type === 'medic' || a.type === 'king') continue;
       if (front === null || a.x * fwd > front * fwd) front = a.x;
     }
     return front;
@@ -627,6 +717,7 @@ export class Battle {
       if (this.isFree(u, nx, ny)) {
         u.x = nx;
         u.y = ny;
+        u.moved = true;
         this.face(u, cx, cy);
         return true;
       }
@@ -634,14 +725,64 @@ export class Battle {
     return false;
   }
 
-  /** A move is allowed if it doesn't bring the unit into (or deeper into) overlap with another. */
+  /**
+   * A move is allowed if it doesn't bring the unit into (or deeper into) overlap
+   * with an ENEMY. Allies don't block each other, so fast units can pass slower
+   * ones; separateAllies() then gently pushes overlapping allies apart.
+   */
   private isFree(u: Unit, nx: number, ny: number): boolean {
     for (const o of this.units) {
-      if (!o.alive || o.id === u.id) continue;
+      if (!o.alive || o.team === u.team) continue;
       const nd = dist2(nx, ny, o.x, o.y);
       if (nd < C.minSeparationSq && nd <= dist2(u.x, u.y, o.x, o.y)) return false;
     }
     return true;
+  }
+
+  /**
+   * Push overlapping allies apart a little each tick (all pushes computed first,
+   * then applied). Only units that stood still this tick (fighting or waiting) are
+   * pushed, so walking units pass through their own army instead of shoving it.
+   */
+  private separateAllies(): void {
+    const units = this.units;
+    const n = units.length;
+    const shiftX = new Array<number>(n).fill(0);
+    const shiftY = new Array<number>(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      const a = units[i];
+      if (!a.alive || a.moved) continue;
+      for (let j = i + 1; j < n; j++) {
+        const b = units[j];
+        if (!b.alive || b.moved || b.team !== a.team) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= C.minSeparationSq) continue;
+        const d = isqrt(d2);
+        // Each unit moves a quarter of the overlap per tick: smooth, not jumpy.
+        const push = Math.trunc((C.minSeparation - d) / 4);
+        let ux = 0;
+        let uy = 1000; // exactly on top of each other: split vertically
+        if (d > 0) {
+          ux = Math.trunc((dx * 1000) / d);
+          uy = Math.trunc((dy * 1000) / d);
+        }
+        const px = Math.trunc((ux * push) / 1000);
+        const py = Math.trunc((uy * push) / 1000);
+        shiftX[i] -= px;
+        shiftY[i] -= py;
+        shiftX[j] += px;
+        shiftY[j] += py;
+      }
+    }
+    const r = C.unitRadius;
+    for (let i = 0; i < n; i++) {
+      if (shiftX[i] === 0 && shiftY[i] === 0) continue;
+      const u = units[i];
+      u.x = Math.min(Math.max(u.x + shiftX[i], r), this.widthSub - r);
+      u.y = Math.min(Math.max(u.y + shiftY[i], r), this.heightSub - r);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -670,6 +811,8 @@ export class Battle {
         t.castProgress = 0;
         this.unitsLost[t.team]++;
         this.events.push({ kind: 'death', unit: t.id });
+        // A focused enemy died: that team goes back to its normal orders.
+        for (const team of [0, 1] as Team[]) if (this.focus[team] === t.id) this.focus[team] = -1;
       }
     }
     for (const h of this.pendingHeal) {
@@ -733,6 +876,8 @@ export class Battle {
   stateHash(): number {
     const h = new Hasher();
     h.add(this.tick);
+    h.add(this.modes[0] === 'king' ? 1 : 0).add(this.modes[1] === 'king' ? 1 : 0);
+    h.add(this.focus[0]).add(this.focus[1]);
     for (const u of this.units) {
       h.add(u.id)
         .add(u.team)
@@ -752,7 +897,31 @@ export class Battle {
   }
 }
 
-/** Convenience: run a whole battle headless. */
-export function simulateBattle(map: MapDef, setups: [ArmySetup, ArmySetup], seed: number): BattleResult {
-  return new Battle(map, setups, seed).runToEnd();
+/**
+ * Re-issue recorded orders that were given at the battle's current tick.
+ * Call before each step(); `next` is the index of the first order not yet applied.
+ * Returns the new index.
+ */
+export function applyRecordedCommands(battle: Battle, commands: readonly RecordedCommand[], next: number): number {
+  while (next < commands.length && commands[next].tick <= battle.tick) {
+    const c = commands[next++];
+    battle.issueCommand(c.team, c.command);
+  }
+  return next;
+}
+
+/** Convenience: run a whole battle headless (optionally with recorded orders). */
+export function simulateBattle(
+  map: MapDef,
+  setups: [ArmySetup, ArmySetup],
+  seed: number,
+  commands: readonly RecordedCommand[] = [],
+): BattleResult {
+  const b = new Battle(map, setups, seed);
+  let next = 0;
+  while (!b.result) {
+    next = applyRecordedCommands(b, commands, next);
+    b.step();
+  }
+  return b.result;
 }

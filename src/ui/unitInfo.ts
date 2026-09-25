@@ -9,7 +9,7 @@ export const UNIT_BLURB: Record<UnitType, string> = {
   archer: 'Shoots from long range. Fragile when enemies reach it.',
   medic: 'Heals the most injured nearby ally. Only fights back if attacked.',
   mage: 'Area blast every few seconds. Punishes tightly packed enemies.',
-  king: 'Strong in melee but slow. Stays near its spot. If your King dies, you LOSE!',
+  king: 'Strong in melee but slow. Follows behind the army. If your King dies, you LOSE!',
 };
 
 export function statLine(type: UnitType): string {

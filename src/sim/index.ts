@@ -1,4 +1,4 @@
-export { Battle, simulateBattle, type Unit } from './battle';
+export { Battle, simulateBattle, applyRecordedCommands, type Unit } from './battle';
 export { validateArmy, deployColumns, mirrorSetup } from './army';
 export { Rng } from './rng';
 export { SUB, HP_SCALE } from './fixed';

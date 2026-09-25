@@ -37,11 +37,28 @@ export interface MapDef {
   rows: string[];
 }
 
+/**
+ * Orders a player can give during the battle:
+ *  - mode 'auto': units pick targets themselves (default)
+ *  - mode 'king': every unit goes for the enemy King
+ *  - focus: every unit attacks one chosen enemy until it dies (target -1 cancels)
+ */
+export type AttackMode = 'auto' | 'king';
+export type BattleCommand = { kind: 'mode'; mode: AttackMode } | { kind: 'focus'; target: number };
+
+/** An order plus the tick it was given on (it takes effect from the next tick). */
+export interface RecordedCommand {
+  tick: number;
+  team: Team;
+  command: BattleCommand;
+}
+
 /** Everything needed to reproduce (replay) a battle exactly. */
 export interface BattleRecord {
   mapId: string;
   seed: number;
   setups: [ArmySetup, ArmySetup];
+  commands: RecordedCommand[];
 }
 
 export type BattleEvent =

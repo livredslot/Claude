@@ -48,6 +48,7 @@ export const C = {
   maxTicks: SIM_RULES.maxBattleSeconds * TPS,
   retargetTicks: secondsToTicks(SIM_RULES.retargetInterval),
   unitRadius: tilesToSub(SIM_RULES.unitRadius),
+  minSeparation: 2 * tilesToSub(SIM_RULES.unitRadius),
   minSeparationSq: sq(2 * tilesToSub(SIM_RULES.unitRadius)),
   initialJitterTicks: Math.round(SIM_RULES.initialAttackJitter * TPS),
 
@@ -69,7 +70,8 @@ export const C = {
   kingGuardResponseSq: sq(tilesToSub(KING_RULES.guardResponseRange)),
   kingHuntSq: sq(tilesToSub(KING_RULES.huntRange)),
   kingHorsemanHuntSq: sq(tilesToSub(KING_RULES.horsemanHuntRange)),
-  kingHomeSlackSq: sq(tilesToSub(KING_RULES.homeSlack)),
+  kingBehind: tilesToSub(KING_RULES.behindArmy),
+  kingFollowSlackSq: sq(tilesToSub(KING_RULES.followSlack)),
 
   holdTriggerSq: sq(tilesToSub(STANCE_RULES.holdTriggerRange)),
   flankEngageSq: sq(tilesToSub(STANCE_RULES.flankEngageRange)),

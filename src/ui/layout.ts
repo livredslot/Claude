@@ -4,7 +4,8 @@ export const GAME_W = 1280;
 export const HUD_H = 100;
 export const MAP_Y = HUD_H;
 export const MAP_H_PX = 20 * TILE_PX;
-export const LEGEND_H = 40;
+/** Bottom bar: battle orders + unit legend. */
+export const LEGEND_H = 72;
 export const GAME_H = HUD_H + MAP_H_PX + LEGEND_H;
 
 export const TEAM_COLORS = [0x3b82f6, 0xef4444] as const;

@@ -6,7 +6,18 @@ import Phaser from 'phaser';
 import { ARMY_RULES, UNIT_TYPES, UNITS } from '../config/gameConfig';
 import { OPEN_PLAINS } from '../data/maps';
 import { TEST_ARMY_BLUE, TEST_ARMY_RED } from '../data/testArmies';
-import { Battle, SIM_CONSTANTS, SUB, type ArmySetup, type BattleEvent, type BattleRecord, type Unit } from '../sim';
+import {
+  Battle,
+  SIM_CONSTANTS,
+  SUB,
+  applyRecordedCommands,
+  type ArmySetup,
+  type AttackMode,
+  type BattleEvent,
+  type BattleRecord,
+  type RecordedCommand,
+  type Unit,
+} from '../sim';
 import { makeButton, type Button } from '../ui/button';
 import { drawUnitShape, ensureUnitTextures, unitTextureKey } from '../ui/unitShapes';
 import {
@@ -15,6 +26,7 @@ import {
   GAME_W,
   HUD_H,
   LEGEND_H,
+  MAP_H_PX,
   MAP_Y,
   TEAM_COLORS,
   TEAM_DARK,
@@ -47,6 +59,8 @@ function sy(y: number): number {
 export interface BattleStartData {
   setups?: [ArmySetup, ArmySetup];
   seed?: number;
+  /** When set, this is a replay: these recorded orders are re-issued and the player can't give new ones. */
+  replayCommands?: RecordedCommand[];
   /** Where "Change army" goes back to (the setup screen), with its settings. */
   setupData?: object;
 }
@@ -71,6 +85,10 @@ export class BattleScene extends Phaser.Scene {
   private debugText!: Phaser.GameObjects.Text;
   private speedButton!: Button;
   private resultShown = false;
+  private isReplay = false;
+  private nextReplayCommand = 0;
+  private modeButtons!: Record<AttackMode, Button>;
+  private orderText!: Phaser.GameObjects.Text;
 
   constructor() {
     super('Battle');
@@ -83,7 +101,9 @@ export class BattleScene extends Phaser.Scene {
     this.startData = data ?? {};
     const seed = data?.seed ?? Math.floor(Math.random() * 0xffffffff) >>> 0;
     const setups = data?.setups ?? [TEST_ARMY_BLUE, TEST_ARMY_RED];
-    this.record = { mapId: OPEN_PLAINS.id, seed, setups };
+    this.isReplay = !!data?.replayCommands;
+    this.nextReplayCommand = 0;
+    this.record = { mapId: OPEN_PLAINS.id, seed, setups, commands: data?.replayCommands ?? [] };
     this.accumulator = 0;
     this.effects = [];
     this.resultShown = false;
@@ -102,6 +122,8 @@ export class BattleScene extends Phaser.Scene {
     this.gFx = this.add.graphics();
     this.gHud = this.add.graphics();
     this.createHud();
+    this.createOrders();
+    this.input.on('pointerdown', this.onMapTap, this);
   }
 
   // ------------------------------------------------------------------
@@ -138,19 +160,87 @@ export class BattleScene extends Phaser.Scene {
     g.destroy();
   }
 
+  /** Compact unit legend on the right of the bottom bar (2 rows). */
   private drawLegend(): void {
     const y = GAME_H - LEGEND_H;
     const g = this.add.graphics();
     g.fillStyle(0x1e293b, 1).fillRect(0, y, GAME_W, LEGEND_H);
-    const itemW = 170;
-    const startX = (GAME_W - itemW * UNIT_TYPES.length) / 2;
+    const itemW = 136;
+    const startX = GAME_W - itemW * 4 - 4;
     UNIT_TYPES.forEach((type, i) => {
-      const x = startX + i * itemW + 20;
-      drawUnitShape(g, type, x, y + LEGEND_H / 2, 0x94a3b8, 0xe2e8f0);
-      this.add
-        .text(x + 20, y + LEGEND_H / 2, UNITS[type].name, { fontFamily: FONT, fontSize: '18px', color: '#e2e8f0' })
-        .setOrigin(0, 0.5);
+      const x = startX + (i % 4) * itemW + 14;
+      const cy = y + 19 + Math.floor(i / 4) * 34;
+      g.save();
+      g.translateCanvas(x, cy);
+      g.scaleCanvas(0.75, 0.75);
+      drawUnitShape(g, type, 0, 0, 0x94a3b8, 0xe2e8f0);
+      g.restore();
+      this.add.text(x + 16, cy, UNITS[type].name, { fontFamily: FONT, fontSize: '15px', color: '#e2e8f0' }).setOrigin(0, 0.5);
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Orders (bottom bar)
+  // ------------------------------------------------------------------
+
+  private createOrders(): void {
+    const y = GAME_H - LEGEND_H;
+    this.add.text(12, y + LEGEND_H / 2, 'Orders', { fontFamily: FONT, fontSize: '16px', color: '#94a3b8', fontStyle: 'bold' }).setOrigin(0, 0.5);
+    this.modeButtons = {
+      auto: makeButton(this, 92, y + 8, 122, LEGEND_H - 16, 'Auto', () => this.setMode('auto'), { fontSize: 19 }),
+      king: makeButton(this, 222, y + 8, 180, LEGEND_H - 16, 'Attack King', () => this.setMode('king'), { fontSize: 19 }),
+    };
+    this.orderText = this.add
+      .text(416, y + LEGEND_H / 2, '', { fontFamily: FONT, fontSize: '15px', color: '#e2e8f0', wordWrap: { width: 300 } })
+      .setOrigin(0, 0.5);
+    if (this.isReplay) {
+      this.modeButtons.auto.setEnabled(false);
+      this.modeButtons.king.setEnabled(false);
+    }
+    this.refreshOrders();
+  }
+
+  private setMode(mode: AttackMode): void {
+    if (this.isReplay) return;
+    this.battle.issueCommand(0, { kind: 'mode', mode });
+    this.refreshOrders();
+  }
+
+  /** Tap on the battlefield: pick the Red unit under the finger as the focus target. */
+  private onMapTap(p: Phaser.Input.Pointer): void {
+    if (this.isReplay || this.battle.result || p.y < MAP_Y || p.y > MAP_Y + MAP_H_PX) return;
+    let best: Unit | null = null;
+    let bestD = (TILE_PX * 1.1) ** 2; // generous finger-sized tap area
+    for (const u of this.battle.units) {
+      if (!u.alive || u.team !== 1) continue;
+      const d = (sx(u.x) - p.x) ** 2 + (sy(u.y) - p.y) ** 2;
+      if (d < bestD) {
+        best = u;
+        bestD = d;
+      }
+    }
+    if (!best) return;
+    const target = this.battle.focus[0] === best.id ? -1 : best.id; // tap again to cancel
+    this.battle.issueCommand(0, { kind: 'focus', target });
+    this.refreshOrders();
+  }
+
+  private refreshOrders(): void {
+    const mode = this.battle.modes[0];
+    this.modeButtons.auto.setSelected(mode === 'auto');
+    this.modeButtons.king.setSelected(mode === 'king');
+    const f = this.battle.focus[0];
+    if (this.isReplay) {
+      this.orderText.setText('Replay: your orders are repeated exactly as you gave them.');
+    } else if (f >= 0) {
+      this.orderText.setText(`Focus: Red ${UNITS[this.battle.units[f].type].name}. Tap it again to cancel.`);
+    } else {
+      this.orderText.setText(
+        mode === 'king'
+          ? 'Everyone is going for the Red King! Tap an enemy to focus it instead.'
+          : 'Tap an enemy to make your whole army attack it.',
+      );
+    }
   }
 
   private createHud(): void {
@@ -206,7 +296,11 @@ export class BattleScene extends Phaser.Scene {
     this.accumulator += Math.min(delta, 250) * this.speed;
     while (this.accumulator >= TICK_MS && !this.battle.result) {
       this.savePrevPositions();
+      if (this.isReplay) this.nextReplayCommand = applyRecordedCommands(this.battle, this.record.commands, this.nextReplayCommand);
+      const focusBefore = this.battle.focus[0];
+      const modeBefore = this.battle.modes[0];
       this.battle.step();
+      if (this.battle.focus[0] !== focusBefore || this.battle.modes[0] !== modeBefore) this.refreshOrders();
       this.spawnEffects(this.battle.events);
       this.accumulator -= TICK_MS;
     }
@@ -289,6 +383,21 @@ export class BattleScene extends Phaser.Scene {
       const bw = 24;
       bars.fillStyle(0x000000, 0.7).fillRect(x - bw / 2 - 1, y - 21, bw + 2, 6);
       bars.fillStyle(hpPct > 0.5 ? 0x22c55e : hpPct > 0.25 ? 0xeab308 : 0xef4444, 1).fillRect(x - bw / 2, y - 20, bw * hpPct, 4);
+    }
+
+    // Marker on the enemy Blue's orders point at: focus target (yellow) or Red King in 'Attack King' mode (orange).
+    const f = this.battle.focus[0];
+    const redKing = this.battle.kingIds[1];
+    const markId =
+      f >= 0 ? f : this.battle.modes[0] === 'king' && redKing >= 0 && this.battle.units[redKing].alive ? redKing : -1;
+    if (markId >= 0) {
+      const [x, y] = this.posOf(this.battle.units[markId], alpha);
+      const pulse = 20 + Math.sin(this.time.now / 150) * 3;
+      const color = f >= 0 ? 0xfacc15 : 0xfb923c;
+      bars.lineStyle(3, color, 1).strokeCircle(x, y, pulse);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        bars.lineBetween(x + dx * (pulse - 6), y + dy * (pulse - 6), x + dx * (pulse + 7), y + dy * (pulse + 7));
+      }
     }
   }
 
@@ -508,10 +617,10 @@ export class BattleScene extends Phaser.Scene {
     const bx = GAME_W / 2 - (bw * 3 + gap * 2) / 2;
     const by = y0 + h - 80;
     const replay = makeButton(this, bx, by, bw, 60, 'Watch replay', () =>
-      this.scene.restart({ ...this.startData, seed, setups }),
+      this.scene.restart({ ...this.startData, seed, setups, replayCommands: [...this.battle.commandLog] }),
     );
     const again = makeButton(this, bx + bw + gap, by, bw, 60, 'Rematch', () =>
-      this.scene.restart({ ...this.startData, seed: undefined, setups }),
+      this.scene.restart({ ...this.startData, seed: undefined, setups, replayCommands: undefined }),
     );
     const change = makeButton(this, bx + 2 * (bw + gap), by, bw, 60, setupData ? 'Change army' : 'Menu', () =>
       setupData ? this.scene.start('Setup', setupData) : this.scene.start('Menu'),

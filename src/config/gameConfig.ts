@@ -59,7 +59,7 @@ export const UNITS: Record<UnitType, UnitStats> = {
 
 /**
  * The King: if your King dies, you lose immediately (like chess).
- * The King stays near where it was placed and only fights enemies that come close.
+ * The King follows the army from behind and only fights enemies that come close.
  */
 export const KING_RULES = {
   /** The King attacks enemies that come within this many tiles. */
@@ -72,8 +72,10 @@ export const KING_RULES = {
   huntRange: 5,
   /** Horsemen look for the enemy King from further away. */
   horsemanHuntRange: 8,
-  /** The King walks back to its starting tile when it drifts further than this (tiles). */
-  homeSlack: 1,
+  /** The King follows this many tiles behind the centre of its army. */
+  behindArmy: 3,
+  /** The King doesn't bother moving if it's within this many tiles of where it wants to be. */
+  followSlack: 1,
 };
 
 /** Special unit rules. */

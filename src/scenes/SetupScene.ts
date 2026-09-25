@@ -312,7 +312,7 @@ export class SetupScene extends Phaser.Scene {
         selTitle.setText(`${UNITS[sel.type].name} (column ${tx + 1}, row ${ty + 1})`);
         selHelp.setText(
           isKing
-            ? 'The King always stays near its starting spot and fights enemies that come close.'
+            ? 'The King follows a few tiles behind your army and fights enemies that come close.'
             : `${STANCE_INFO[sel.stance].name}: ${STANCE_INFO[sel.stance].text}`,
         );
       }

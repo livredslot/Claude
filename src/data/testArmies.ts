@@ -11,9 +11,9 @@ function column(type: UnitType, tx: number, rows: number[], stance?: Stance): Un
 /** Blue army, left side (columns 0–5; column 5 is the front). */
 export const TEST_ARMY_BLUE: ArmySetup = {
   units: [
-    ...column('swordsman', 5, [4, 5, 6, 12, 13, 14]),
-    ...column('spearman', 5, [7, 8, 9, 10, 11]),
-    ...column('horseman', 4, [2, 3, 16], 'flank'),
+    ...column('swordsman', 5, [5, 6, 7, 8, 9, 10, 11]),
+    ...column('spearman', 5, [4, 12, 13, 14]),
+    ...column('horseman', 4, [2, 3, 16]),
     ...column('archer', 3, [6, 7, 8, 9, 10]),
     ...column('medic', 2, [7, 9, 11]),
     ...column('mage', 1, [8, 10]),
