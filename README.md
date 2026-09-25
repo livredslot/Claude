@@ -8,8 +8,10 @@ automatically for up to 90 seconds. Built with **Phaser 3**, **Vite** and **Type
 - **King:** every army has exactly 1 King (part of the 25). If your King dies, you lose immediately.
   The King follows a few tiles behind its army; Medics follow the army itself.
   Every unit simply fights the nearest enemy; only the player's orders change that.
-- **Battle orders:** "Auto" (units choose targets) or "Attack King" (everyone goes for the enemy King),
-  and tap any enemy to make your whole army focus it. Orders are recorded, so replays repeat them.
+- **Battle orders:** "Auto" (fight the nearest enemy), "Attack King" (everyone goes for the enemy King)
+  or "Keep Formation" (the army marches as a block in the shape you placed it; units break off when they
+  find a target). Tap any enemy to make your whole army focus it. Orders are recorded, so replays repeat them.
+- **Stances** (set per unit or for all units on the setup screen): Advance or Flank.
 - Units walk through their own army, so fast units aren't stuck behind slow ones.
 - **Army setup:** Step 1 picks how many of each unit (+/−, total 25); Step 2 places them by
   tapping or dragging in your deployment zone, with stances, Auto-place, Save/Load.

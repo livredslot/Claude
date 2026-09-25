@@ -46,9 +46,9 @@ describe('army draft', () => {
 
   it('auto-place keeps units the player already placed', () => {
     const d = newDraft();
-    d.placed.set(tileKey(5, 0), { type: 'mage', stance: 'hold' });
+    d.placed.set(tileKey(5, 0), { type: 'mage', stance: 'flank' });
     autoPlace(d, H);
-    expect(d.placed.get(tileKey(5, 0))).toEqual({ type: 'mage', stance: 'hold' });
+    expect(d.placed.get(tileKey(5, 0))).toEqual({ type: 'mage', stance: 'flank' });
     expect(allPlaced(d)).toBe(true);
   });
 

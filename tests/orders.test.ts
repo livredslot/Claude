@@ -137,3 +137,52 @@ describe('targeting', () => {
     expect(sword.targetId).toBe(archer.id);
   });
 });
+
+describe("'Keep Formation' order", () => {
+  const blue: ArmySetup = {
+    units: [
+      { type: 'horseman', tx: 5, ty: 8 }, // speed 1.7
+      { type: 'swordsman', tx: 5, ty: 10 }, // speed 1.0
+      { type: 'archer', tx: 3, ty: 10 },
+      { type: 'king', tx: 0, ty: 10 },
+    ],
+  };
+  const red: ArmySetup = { units: [{ type: 'king', tx: 39, ty: 10 }, { type: 'swordsman', tx: 39, ty: 12 }] };
+  const unit = (b: Battle, t: string) => b.units.find((u) => u.team === 0 && u.type === t)!;
+
+  it('marches as a block at the speed of its slowest unit, keeping its shape', () => {
+    const b = new Battle(OPEN_PLAINS, [blue, red], 1);
+    b.issueCommand(0, { kind: 'mode', mode: 'formation' });
+    for (let i = 0; i < 100; i++) b.step(); // 5 s
+    const [horse, sword, archer] = ['horseman', 'swordsman', 'archer'].map((t) => unit(b, t));
+    expect(horse.inFormation).toBe(true);
+    expect(sword.x).toBeGreaterThan(5500 + 4000); // moved forward ~5 tiles
+    expect(Math.abs(horse.x - sword.x)).toBeLessThanOrEqual(100); // fast Horseman stays level with the Swordsman
+    expect(sword.x - archer.x).toBeGreaterThan(1900); // Archer stays 2 tiles behind
+    expect(horse.y).toBeLessThan(sword.y); // rows kept
+  });
+
+  it('re-forms around the army when switched on mid-battle (nobody walks back)', () => {
+    const b = new Battle(OPEN_PLAINS, [blue, red], 1);
+    for (let i = 0; i < 60; i++) b.step(); // 3 s of Auto: units spread out
+    const before = unit(b, 'swordsman').x;
+    b.issueCommand(0, { kind: 'mode', mode: 'formation' });
+    for (let i = 0; i < 20; i++) b.step();
+    expect(unit(b, 'swordsman').x).toBeGreaterThanOrEqual(before - 1000);
+  });
+
+  it('a unit leaves the formation once an enemy is near', () => {
+    const b = new Battle(OPEN_PLAINS, [blue, red], 1);
+    b.issueCommand(0, { kind: 'mode', mode: 'formation' });
+    while (!b.result && b.units.every((u) => u.team !== 0 || u.type === 'king' || u.inFormation)) b.step();
+    expect(b.units.some((u) => u.team === 0 && u.type !== 'king' && !u.inFormation)).toBe(true);
+  });
+
+  it('switching back to Auto releases everyone', () => {
+    const b = new Battle(OPEN_PLAINS, [blue, red], 1);
+    b.issueCommand(0, { kind: 'mode', mode: 'formation' });
+    b.step();
+    b.issueCommand(0, { kind: 'mode', mode: 'auto' });
+    expect(b.units.some((u) => u.inFormation)).toBe(false);
+  });
+});

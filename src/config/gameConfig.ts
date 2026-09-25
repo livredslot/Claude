@@ -94,8 +94,12 @@ export const UNIT_RULES = {
 
 /** Stance rules. */
 export const STANCE_RULES = {
-  /** Hold: stay in place until an enemy comes this close (tiles). */
-  holdTriggerRange: 4,
+  /**
+   * "Keep Formation" battle order: melee units leave the marching block when an
+   * enemy comes this close (tiles). Ranged units leave when an enemy is within
+   * their attack range. Any unit also leaves the block when it gets hit.
+   */
+  formationEngageRange: 3,
   /** Flank: stop flanking and engage when an enemy comes this close (tiles). */
   flankEngageRange: 3,
   /** Flank: how far from the top/bottom map edge flankers walk (tiles). */

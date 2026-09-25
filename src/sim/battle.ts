@@ -53,8 +53,11 @@ export interface Unit {
   facingY: number;
   /** Mage: ticks of the current cast completed so far. */
   castProgress: number;
-  /** Hold stance: has an enemy come close enough to release the unit? */
-  holdReleased: boolean;
+  /** 'Keep Formation' order: still marching with the block (no target found yet)? */
+  inFormation: boolean;
+  /** Where the unit was placed (its slot in the formation). */
+  readonly startX: number;
+  readonly startY: number;
   /** Flank stance: 0 = heading to edge, 1 = moving along edge, 2 = engaging. */
   flankPhase: 0 | 1 | 2;
   /** Which map edge (y in sub-tiles) the flanker uses. */
@@ -80,7 +83,7 @@ function emptyByType(): Record<UnitType, number> {
 }
 
 function stanceCode(s: Stance): number {
-  return s === 'advance' ? 0 : s === 'hold' ? 1 : 2;
+  return s === 'advance' ? 0 : 1;
 }
 
 function typeCode(t: UnitType): number {
@@ -124,6 +127,8 @@ export class Battle {
   readonly kingIds: [number, number] = [-1, -1];
   /** Current attack order per team. */
   readonly modes: [AttackMode, AttackMode] = ['auto', 'auto'];
+  /** How far (sub-tiles) each team's Keep-formation block has marched forward. */
+  readonly formationOffset: [number, number] = [0, 0];
   /** Enemy unit each team is focusing on, or -1. */
   readonly focus: [number, number] = [-1, -1];
   /** Every order given so far, for replays and (later) sending to the other player. */
@@ -173,7 +178,9 @@ export class Battle {
       facingX: team === 0 ? 1000 : -1000,
       facingY: 0,
       castProgress: 0,
-      holdReleased: false,
+      inFormation: false,
+      startX: p.tx * SUB + SUB / 2,
+      startY: y,
       flankPhase: 0,
       flankEdgeY: y < this.heightSub / 2 ? C.flankEdgeOffset : this.heightSub - C.flankEdgeOffset,
       lastAttackerId: -1,
@@ -212,17 +219,32 @@ export class Battle {
     else this.focus[team] = command.target;
     this.commandLog.push({ tick: this.tick, team, command: { ...command } });
 
-    const attacking = this.focus[team] >= 0 || this.modes[team] === 'king';
+    const formation = this.modes[team] === 'formation' && this.focus[team] < 0;
     for (const u of this.units) {
       if (u.team !== team) continue;
       u.retargetIn = 0; // re-think targets on the next tick
-      if (attacking) {
-        // A direct order overrides Hold and Flank stances.
-        u.holdReleased = true;
-        u.flankPhase = 2;
-      }
+      u.flankPhase = 2; // any order overrides the Flank stance
+      u.inFormation = false;
     }
+    if (formation) this.formUp(team);
     return true;
+  }
+
+  /**
+   * Start 'Keep Formation': every fighter rejoins the block, which re-forms
+   * around where the army is now (the average distance marched so far).
+   */
+  private formUp(team: Team): void {
+    const fwd = this.forward(team);
+    let sum = 0;
+    let n = 0;
+    for (const u of this.units) {
+      if (!u.alive || u.team !== team || u.type === 'king' || u.type === 'medic') continue;
+      u.inFormation = true;
+      sum += (u.x - u.startX) * fwd;
+      n++;
+    }
+    this.formationOffset[team] = n ? Math.max(0, Math.trunc(sum / n)) : 0;
   }
 
   /** The enemy the team's orders point at (focus first, then the King in 'king' mode), or null. */
@@ -252,6 +274,7 @@ export class Battle {
     }
 
     for (const u of units) if (u.alive) this.updateTarget(u);
+    this.advanceFormations();
 
     // IDs interleave the teams (Blue 0, Red 1, Blue 2, ...). Each tick the seeded RNG
     // decides whether to swap every Blue/Red pair (1, 0, 3, 2, ...), so neither team
@@ -352,12 +375,14 @@ export class Battle {
       return;
     }
 
-    // Hold stance: stand still until an enemy is close. Ranged units still shoot.
-    if (u.stance === 'hold' && !u.holdReleased) {
-      if (this.anyEnemyWithin(u, C.holdTriggerSq)) {
-        u.holdReleased = true;
+    // 'Keep Formation' order: march with the block until a target is found.
+    if (u.inFormation) {
+      const engageSq = u.stats.ranged ? u.stats.rangeSq : C.formationEngageSq;
+      if (this.anyEnemyWithin(u, engageSq)) {
+        u.inFormation = false;
       } else {
-        if (u.stats.ranged) this.fireInPlace(u);
+        const slotX = u.startX + this.forward(u.team) * this.formationOffset[u.team];
+        this.moveToward(u, slotX, u.startY);
         return;
       }
     }
@@ -388,23 +413,6 @@ export class Battle {
     }
   }
 
-  /** Ranged unit that must not move: shoot its target, or any enemy in range. */
-  private fireInPlace(u: Unit): void {
-    if (u.type === 'mage') {
-      if (this.anyEnemyWithin(u, u.stats.rangeSq)) this.progressCast(u);
-      else u.castProgress = 0;
-      return;
-    }
-    let t = u.targetId >= 0 ? this.units[u.targetId] : null;
-    if (!t || !t.alive || !this.inRange(u, t)) {
-      const id = this.nearestEnemy(u, undefined, u.stats.rangeSq);
-      t = id >= 0 ? this.units[id] : null;
-    }
-    if (!t) return;
-    this.face(u, t.x - u.x, t.y - u.y);
-    if (this.readyToAttack(u)) this.attack(u, t);
-  }
-
   /**
    * The first time a unit gets an enemy in reach it hesitates for a random
    * moment (seeded RNG), so fights don't play out in perfect lockstep.
@@ -426,6 +434,22 @@ export class Battle {
     this.pendingDamage.push({ target: t.id, amount: dmg, melee, source: u.id });
     this.events.push({ kind: melee ? 'melee' : 'arrow', from: u.id, to: t.id });
     u.cooldown = u.stats.attackTicks;
+  }
+
+  // ---- Keep Formation order ----
+
+  /**
+   * Move each team's formation block forward at the speed of its slowest unit
+   * still in formation, so the block keeps its shape.
+   */
+  private advanceFormations(): void {
+    for (const team of [0, 1] as Team[]) {
+      let speed = Infinity;
+      for (const u of this.units) {
+        if (u.alive && u.team === team && u.inFormation) speed = Math.min(speed, u.stats.speed);
+      }
+      if (speed !== Infinity) this.formationOffset[team] += speed;
+    }
   }
 
   // ---- King ----
@@ -770,6 +794,7 @@ export class Battle {
       t.hp -= p.amount;
       t.lastAttackerId = src.id;
       t.lastAttackedTick = this.tick;
+      t.inFormation = false; // being hit means a target has been found
       // Melee damage interrupts a Mage's cast; it must start over.
       if (p.melee && t.type === 'mage' && t.castProgress > 0) {
         t.castProgress = 0;
@@ -862,6 +887,7 @@ export class Battle {
         .add(u.engaged ? 1 : 0)
         .add(u.targetId)
         .add(u.castProgress)
+        .add(u.inFormation ? 1 : 0)
         .add(u.facingX)
         .add(u.facingY);
     }

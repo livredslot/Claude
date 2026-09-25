@@ -5,7 +5,11 @@ export type { UnitType };
 /** 0 = Blue (left side), 1 = Red (right side). */
 export type Team = 0 | 1;
 
-export type Stance = 'advance' | 'hold' | 'flank';
+/**
+ * advance: move toward the nearest enemy right away
+ * flank:   go along the nearest map edge first, then attack
+ */
+export type Stance = 'advance' | 'flank';
 
 /** One unit placed by a player before the battle, in absolute map tile coordinates. */
 export interface UnitPlacement {
@@ -39,11 +43,13 @@ export interface MapDef {
 
 /**
  * Orders a player can give during the battle:
- *  - mode 'auto': units pick targets themselves (default)
+ *  - mode 'auto': units fight the nearest enemy (default)
  *  - mode 'king': every unit goes for the enemy King
+ *  - mode 'formation': the army marches forward as a block, keeping the placed
+ *    shape; each unit breaks off to fight once it finds a target
  *  - focus: every unit attacks one chosen enemy until it dies (target -1 cancels)
  */
-export type AttackMode = 'auto' | 'king';
+export type AttackMode = 'auto' | 'king' | 'formation';
 export type BattleCommand = { kind: 'mode'; mode: AttackMode } | { kind: 'focus'; target: number };
 
 /** An order plus the tick it was given on (it takes effect from the next tick). */

@@ -187,16 +187,16 @@ export class BattleScene extends Phaser.Scene {
     const y = GAME_H - LEGEND_H;
     this.add.text(12, y + LEGEND_H / 2, 'Orders', { fontFamily: FONT, fontSize: '16px', color: '#94a3b8', fontStyle: 'bold' }).setOrigin(0, 0.5);
     this.modeButtons = {
-      auto: makeButton(this, 92, y + 8, 122, LEGEND_H - 16, 'Auto', () => this.setMode('auto'), { fontSize: 19 }),
-      king: makeButton(this, 222, y + 8, 180, LEGEND_H - 16, 'Attack King', () => this.setMode('king'), { fontSize: 19 }),
+      auto: makeButton(this, 80, y + 8, 96, LEGEND_H - 16, 'Auto', () => this.setMode('auto'), { fontSize: 18 }),
+      king: makeButton(this, 184, y + 8, 124, LEGEND_H - 16, 'Attack\nKing', () => this.setMode('king'), { fontSize: 17 }),
+      formation: makeButton(this, 316, y + 8, 124, LEGEND_H - 16, 'Keep\nFormation', () => this.setMode('formation'), {
+        fontSize: 17,
+      }),
     };
     this.orderText = this.add
-      .text(416, y + LEGEND_H / 2, '', { fontFamily: FONT, fontSize: '15px', color: '#e2e8f0', wordWrap: { width: 300 } })
+      .text(452, y + LEGEND_H / 2, '', { fontFamily: FONT, fontSize: '14px', color: '#e2e8f0', wordWrap: { width: 270 } })
       .setOrigin(0, 0.5);
-    if (this.isReplay) {
-      this.modeButtons.auto.setEnabled(false);
-      this.modeButtons.king.setEnabled(false);
-    }
+    if (this.isReplay) for (const b of Object.values(this.modeButtons)) b.setEnabled(false);
     this.refreshOrders();
   }
 
@@ -227,8 +227,7 @@ export class BattleScene extends Phaser.Scene {
 
   private refreshOrders(): void {
     const mode = this.battle.modes[0];
-    this.modeButtons.auto.setSelected(mode === 'auto');
-    this.modeButtons.king.setSelected(mode === 'king');
+    for (const [m, b] of Object.entries(this.modeButtons)) b.setSelected(m === mode);
     const f = this.battle.focus[0];
     if (this.isReplay) {
       this.orderText.setText('Replay: your orders are repeated exactly as you gave them.');
@@ -238,7 +237,9 @@ export class BattleScene extends Phaser.Scene {
       this.orderText.setText(
         mode === 'king'
           ? 'Everyone is going for the Red King! Tap an enemy to focus it instead.'
-          : 'Tap an enemy to make your whole army attack it.',
+          : mode === 'formation'
+            ? 'Marching in formation. Units break off when they find a target.'
+            : 'Tap an enemy to make your whole army attack it.',
       );
     }
   }

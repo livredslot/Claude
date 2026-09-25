@@ -68,7 +68,7 @@ export const C = {
   kingFollowSlackSq: sq(tilesToSub(KING_RULES.followSlack)),
 
 
-  holdTriggerSq: sq(tilesToSub(STANCE_RULES.holdTriggerRange)),
+  formationEngageSq: sq(tilesToSub(STANCE_RULES.formationEngageRange)),
   flankEngageSq: sq(tilesToSub(STANCE_RULES.flankEngageRange)),
   flankEdgeOffset: tilesToSub(STANCE_RULES.flankEdgeOffset),
 };

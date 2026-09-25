@@ -207,7 +207,10 @@ export function loadPreset(): ArmyDraft | null {
     for (const t of UNIT_TYPES) if (typeof data.counts?.[t] === 'number') counts[t] = data.counts[t];
     const placed = new Map<string, PlacedUnit>();
     for (const [k, u] of data.placed ?? []) {
-      if (UNITS[u.type] && ['advance', 'hold', 'flank'].includes(u.stance)) placed.set(k, u);
+      if (!UNITS[u.type]) continue;
+      // Removed stances ('hold') in older saves fall back to 'advance'.
+      const stance = u.stance === 'flank' ? 'flank' : 'advance';
+      placed.set(k, { type: u.type, stance });
     }
     const draft = { counts, placed };
     trimToCounts(draft);

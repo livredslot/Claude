@@ -53,6 +53,8 @@ const PREVIEW_COLS = 3;
 
 const PANEL_X = GRID_X + (ZONE_COLS + PREVIEW_COLS) * CELL + 36;
 
+const STANCES: Stance[] = ['advance', 'flank'];
+
 export class SetupScene extends Phaser.Scene {
   private mode: 'ai' | 'pvp' = 'ai';
   private draft!: ArmyDraft;
@@ -70,6 +72,8 @@ export class SetupScene extends Phaser.Scene {
 
   // Step 2 state
   private selectedType: UnitType | null = null;
+  /** Stance given to newly placed units (changed by the "all units" stance buttons). */
+  private defaultStance: Stance = 'advance';
   private selectedKey: string | null = null;
   private dragKey: string | null = null;
   private dragMoved = false;
@@ -297,29 +301,37 @@ export class SetupScene extends Phaser.Scene {
     const selHelp = this.keep(
       this.add.text(px + 14, y + 44, '', { fontFamily: FONT, fontSize: '16px', color: '#cbd5e1', wordWrap: { width: GAME_W - px - 60 } }),
     );
-    const stanceButtons = (['advance', 'hold', 'flank'] as Stance[]).map((st, i) =>
-      this.button(px + 14 + i * 186, y + 120, 176, 62, STANCE_INFO[st].name, () => this.setStance(st)),
+    // With a unit selected these set its stance; with nothing selected they set ALL units.
+    const stanceButtons = STANCES.map((st, i) =>
+      this.button(px + 14 + i * 186, y + 120, 176, 62, STANCE_INFO[st].name, () =>
+        this.selectedKey ? this.setStance(st) : this.setAllStances(st),
+      ),
     );
-    const removeBtn = this.button(px + 14 + 3 * 186, y + 120, 176, 62, 'Remove', () => this.removeSelected());
+    const removeBtn = this.button(px + 14 + 2 * 186, y + 120, 176, 62, 'Remove', () => this.removeSelected());
     this.refreshers.push(() => {
       const sel = this.selectedKey ? this.draft.placed.get(this.selectedKey) : undefined;
-      const isKing = sel?.type === 'king';
+      const noStance = sel?.type === 'king' || sel?.type === 'medic';
       if (!sel) {
-        selTitle.setText('No unit selected');
-        selHelp.setText('Tap a placed unit to choose its stance or remove it. Drag a placed unit to move it.');
+        selTitle.setText('Stance for ALL units (or tap a unit to change just that one)');
+        selHelp.setText(
+          'Tap a placed unit to select it, then tap an empty square to move it there (or another unit to swap). ' +
+            'Tap it again to deselect.',
+        );
       } else {
         const [tx, ty] = parseKey(this.selectedKey!);
-        selTitle.setText(`${UNITS[sel.type].name} (column ${tx + 1}, row ${ty + 1})`);
+        selTitle.setText(`${UNITS[sel.type].name} (column ${tx + 1}, row ${ty + 1}): tap a square to move it`);
         selHelp.setText(
-          isKing
+          sel.type === 'king'
             ? 'The King follows a few tiles behind your army and fights enemies that come close.'
-            : `${STANCE_INFO[sel.stance].name}: ${STANCE_INFO[sel.stance].text}`,
+            : sel.type === 'medic'
+              ? 'Medics follow the army and heal; they have no stance.'
+              : `${STANCE_INFO[sel.stance].name}: ${STANCE_INFO[sel.stance].text}`,
         );
       }
+      const allSame = this.commonStance();
       stanceButtons.forEach((b, i) => {
-        const st = (['advance', 'hold', 'flank'] as Stance[])[i];
-        b.container.setVisible(!!sel && !isKing);
-        b.setSelected(sel?.stance === st);
+        b.container.setVisible(!noStance);
+        b.setSelected(sel ? sel.stance === STANCES[i] : allSame === STANCES[i]);
       });
       removeBtn.container.setVisible(!!sel);
     });
@@ -413,7 +425,7 @@ export class SetupScene extends Phaser.Scene {
       if (key === this.selectedKey) g.lineStyle(3, 0xfacc15, 1).strokeRect(cx - CELL / 2 + 1, cy - CELL / 2 + 1, CELL - 2, CELL - 2);
       this.unitLayer.add(this.add.image(cx, cy, unitTextureKey(u.type, 0)).setScale(0.85));
       const badge = STANCE_INFO[u.stance].badge;
-      if (badge && u.type !== 'king') {
+      if (badge && u.type !== 'king' && u.type !== 'medic') {
         this.unitLayer.add(
           this.add
             .text(cx + CELL / 2 - 2, cy - CELL / 2 + 1, badge, {
@@ -446,6 +458,13 @@ export class SetupScene extends Phaser.Scene {
     if (this.draft.placed.has(key)) {
       this.dragKey = key;
       this.dragMoved = false;
+    } else if (this.selectedKey) {
+      // A unit is selected: tapping an empty square moves it there.
+      const u = this.draft.placed.get(this.selectedKey)!;
+      this.draft.placed.delete(this.selectedKey);
+      this.draft.placed.set(key, u);
+      this.selectedKey = null;
+      this.refresh();
     } else {
       this.painting = true;
       this.tryPlace(key);
@@ -473,8 +492,17 @@ export class SetupScene extends Phaser.Scene {
 
   private onPointerUp(): void {
     if (this.dragKey && !this.dragMoved) {
-      // A tap on a placed unit selects it (tap again to deselect).
-      this.selectedKey = this.selectedKey === this.dragKey ? null : this.dragKey;
+      if (this.selectedKey && this.selectedKey !== this.dragKey) {
+        // Another unit was selected: swap the two.
+        const a = this.draft.placed.get(this.selectedKey)!;
+        const b = this.draft.placed.get(this.dragKey)!;
+        this.draft.placed.set(this.selectedKey, b);
+        this.draft.placed.set(this.dragKey, a);
+        this.selectedKey = null;
+      } else {
+        // A tap on a placed unit selects it (tap again to deselect).
+        this.selectedKey = this.selectedKey === this.dragKey ? null : this.dragKey;
+      }
       this.refresh();
     }
     this.dragKey = null;
@@ -491,9 +519,28 @@ export class SetupScene extends Phaser.Scene {
       this.toast(`No ${UNITS[type].name}s left to place.`);
       return;
     }
-    this.draft.placed.set(key, { type, stance: 'advance' });
+    this.draft.placed.set(key, { type, stance: this.defaultStance });
     this.selectedKey = null;
     if (remainingToPlace(this.draft, type) <= 0) this.selectedType = this.nextTypeToPlace(type);
+    this.refresh();
+  }
+
+  /** Units that can have a stance (not the King or Medics). */
+  private stanceUnits() {
+    return [...this.draft.placed.values()].filter((u) => u.type !== 'king' && u.type !== 'medic');
+  }
+
+  /** The stance shared by all units, or null if they differ. */
+  private commonStance(): Stance | null {
+    const units = this.stanceUnits();
+    if (!units.length) return this.defaultStance;
+    return units.every((u) => u.stance === units[0].stance) ? units[0].stance : null;
+  }
+
+  private setAllStances(stance: Stance): void {
+    for (const u of this.stanceUnits()) u.stance = stance;
+    this.defaultStance = stance; // units placed later get it too
+    this.toast(`All units: ${STANCE_INFO[stance].name}`);
     this.refresh();
   }
 

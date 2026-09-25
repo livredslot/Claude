@@ -19,6 +19,5 @@ export function statLine(type: UnitType): string {
 
 export const STANCE_INFO: Record<Stance, { name: string; badge: string; text: string }> = {
   advance: { name: 'Advance', badge: '', text: 'Moves toward the enemy right away.' },
-  hold: { name: 'Hold', badge: 'H', text: 'Stays put until an enemy comes close (ranged units still shoot).' },
   flank: { name: 'Flank', badge: 'F', text: 'Goes along the nearest map edge first, then attacks.' },
 };
