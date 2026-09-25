@@ -50,7 +50,7 @@ export interface UnitStats {
 export const UNITS: Record<UnitType, UnitStats> = {
   swordsman: { name: 'Swordsman', hp: 120, damage: 15, attackInterval: 1.0, range: 1.0, speed: 1.0, value: 2, ranged: false },
   spearman: { name: 'Spearman', hp: 110, damage: 12, attackInterval: 1.2, range: 1.5, speed: 0.9, value: 2, ranged: false },
-  horseman: { name: 'Horseman', hp: 100, damage: 18, attackInterval: 1.2, range: 1.0, speed: 2.0, value: 3, ranged: false },
+  horseman: { name: 'Horseman', hp: 100, damage: 18, attackInterval: 1.2, range: 1.0, speed: 1.5, value: 3, ranged: false },
   archer: { name: 'Archer', hp: 60, damage: 10, attackInterval: 1.5, range: 6.0, speed: 1.0, value: 2, ranged: true },
   medic: { name: 'Medic', hp: 70, damage: 3, attackInterval: 1.0, range: 1.0, speed: 1.1, value: 2, ranged: false },
   mage: { name: 'Mage', hp: 50, damage: 20, attackInterval: 3.0, range: 5.0, speed: 0.9, value: 3, ranged: true },
@@ -68,10 +68,6 @@ export const KING_RULES = {
   guardRadius: 4,
   /** ...if that enemy is also within this many tiles of the ally. */
   guardResponseRange: 8,
-  /** Units go for the enemy King when it is within this many tiles. */
-  huntRange: 5,
-  /** Horsemen look for the enemy King from further away. */
-  horsemanHuntRange: 8,
   /** The King follows this many tiles behind the centre of its army. */
   behindArmy: 3,
   /** The King doesn't bother moving if it's within this many tiles of where it wants to be. */

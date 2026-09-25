@@ -68,8 +68,6 @@ export const C = {
   kingEngageSq: sq(tilesToSub(KING_RULES.engageRange)),
   kingGuardSq: sq(tilesToSub(KING_RULES.guardRadius)),
   kingGuardResponseSq: sq(tilesToSub(KING_RULES.guardResponseRange)),
-  kingHuntSq: sq(tilesToSub(KING_RULES.huntRange)),
-  kingHorsemanHuntSq: sq(tilesToSub(KING_RULES.horsemanHuntRange)),
   kingBehind: tilesToSub(KING_RULES.behindArmy),
   kingFollowSlackSq: sq(tilesToSub(KING_RULES.followSlack)),
 

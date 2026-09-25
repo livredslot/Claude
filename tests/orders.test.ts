@@ -74,7 +74,7 @@ describe('movement and followers', () => {
     };
     const red: ArmySetup = { units: [{ type: 'king', tx: 39, ty: 10 }] };
     const b = new Battle(OPEN_PLAINS, [blue, red], 1);
-    for (let i = 0; i < 60; i++) b.step(); // 3 seconds
+    for (let i = 0; i < 100; i++) b.step(); // 5 seconds
     const horse = b.units.find((u) => u.type === 'horseman')!;
     const maxSword = Math.max(...b.units.filter((u) => u.type === 'swordsman' && u.team === 0).map((u) => u.x));
     expect(horse.x).toBeGreaterThan(maxSword + 1000); // more than a tile ahead
