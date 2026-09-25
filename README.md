@@ -7,8 +7,7 @@ automatically for up to 90 seconds. Built with **Phaser 3**, **Vite** and **Type
 
 - **King:** every army has exactly 1 King (part of the 25). If your King dies, you lose immediately.
   The King follows a few tiles behind its army; Medics follow the army itself.
-  Units defend their own King when enemies get close; they only go after the enemy King on the "Attack King" order.
-  A unit that gets attacked fights back against its attacker before its other priorities.
+  Every unit simply fights the nearest enemy; only the player's orders change that.
 - **Battle orders:** "Auto" (units choose targets) or "Attack King" (everyone goes for the enemy King),
   and tap any enemy to make your whole army focus it. Orders are recorded, so replays repeat them.
 - Units walk through their own army, so fast units aren't stuck behind slow ones.

@@ -101,40 +101,39 @@ describe('movement and followers', () => {
   });
 });
 
-describe('fighting back', () => {
-  it('a unit hit by an Archer goes after that Archer instead of the nearest enemy', () => {
+describe('targeting', () => {
+  it('every unit (except the King and Medics) targets its nearest enemy', () => {
+    const b = new Battle(OPEN_PLAINS, SETUPS, 1);
+    for (let i = 0; i < 300; i++) {
+      b.step();
+      if (b.tick % 20 !== 0) continue;
+      for (const u of b.units) {
+        if (!u.alive || u.type === 'king' || u.type === 'medic' || u.targetId < 0) continue;
+        const t = b.units[u.targetId];
+        if (!t.alive) continue;
+        // Targets are re-picked once a second, so allow the target to be up to a tile further than the nearest.
+        const d = (e: { x: number; y: number }) => Math.hypot(e.x - u.x, e.y - u.y);
+        const nearest = Math.min(...b.units.filter((e) => e.alive && e.team !== u.team).map(d));
+        expect(d(t)).toBeLessThanOrEqual(nearest + 2000);
+      }
+    }
+  });
+
+  it("the player's focus order overrides nearest-enemy targeting", () => {
     const blue: ArmySetup = { units: [{ type: 'swordsman', tx: 5, ty: 10 }] };
-    // The Red Swordsman is nearer (5 tiles) than the Archer (~5.4 tiles), but the Archer shoots first.
     const red: ArmySetup = {
       units: [
         { type: 'swordsman', tx: 10, ty: 10 },
-        { type: 'archer', tx: 10, ty: 12 },
+        { type: 'archer', tx: 10, ty: 16 },
       ],
     };
     const b = new Battle(OPEN_PLAINS, [blue, red], 1);
     const sword = b.units.find((u) => u.team === 0)!;
     const archer = b.units.find((u) => u.type === 'archer')!;
     b.step();
-    expect(sword.targetId).not.toBe(archer.id); // nearest enemy at first
-    while (!b.events.some((e) => e.kind === 'arrow')) b.step();
-    b.step();
-    b.step();
-    expect(sword.targetId).toBe(archer.id);
-  });
-
-  it("the player's focus order still comes first", () => {
-    const blue: ArmySetup = { units: [{ type: 'swordsman', tx: 5, ty: 10 }] };
-    const red: ArmySetup = {
-      units: [
-        { type: 'swordsman', tx: 10, ty: 10 },
-        { type: 'archer', tx: 10, ty: 12 },
-      ],
-    };
-    const b = new Battle(OPEN_PLAINS, [blue, red], 1);
-    const sword = b.units.find((u) => u.team === 0)!;
-    const redSword = b.units.find((u) => u.team === 1 && u.type === 'swordsman')!;
-    b.issueCommand(0, { kind: 'focus', target: redSword.id });
+    expect(sword.targetId).not.toBe(archer.id);
+    b.issueCommand(0, { kind: 'focus', target: archer.id });
     for (let i = 0; i < 40; i++) b.step();
-    expect(sword.targetId).toBe(redSword.id);
+    expect(sword.targetId).toBe(archer.id);
   });
 });

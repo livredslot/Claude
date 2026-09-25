@@ -5,7 +5,7 @@ import type { Stance } from '../sim/types';
 export const UNIT_BLURB: Record<UnitType, string> = {
   swordsman: 'Sturdy all-rounder. Shield: takes 25% less arrow damage. Beats Spearmen.',
   spearman: 'Long reach, triple damage vs Horsemen. Weak vs Swordsmen and Archers.',
-  horseman: 'Fastest unit. Hunts Archers, Medics and Mages. Weak vs Spearmen.',
+  horseman: 'Fastest unit: great for flanking and reaching Archers, Medics and Mages. Weak vs Spearmen.',
   archer: 'Shoots from long range. Fragile when enemies reach it.',
   medic: 'Heals the most injured nearby ally. Only fights back if attacked.',
   mage: 'Area blast every few seconds. Punishes tightly packed enemies.',

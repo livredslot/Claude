@@ -64,10 +64,6 @@ export const UNITS: Record<UnitType, UnitStats> = {
 export const KING_RULES = {
   /** The King attacks enemies that come within this many tiles. */
   engageRange: 3,
-  /** Allies rush to defend when an enemy is this close to their King (tiles)... */
-  guardRadius: 4,
-  /** ...if that enemy is also within this many tiles of the ally. */
-  guardResponseRange: 8,
   /** The King follows this many tiles behind the centre of its army. */
   behindArmy: 3,
   /** The King doesn't bother moving if it's within this many tiles of where it wants to be. */
@@ -80,10 +76,6 @@ export const UNIT_RULES = {
   swordsmanArrowReductionPct: 25,
   /** Spearman damage multiplier against Horsemen. */
   spearmanVsHorsemanMultiplier: 3,
-  /** Horseman looks for Archers/Mages/Medics within this many tiles first. */
-  horsemanPriorityRange: 8,
-  /** Spearman looks for Horsemen within this many tiles first. */
-  spearmanPriorityRange: 5,
   /** Medic healing, HP per second, applied continuously. */
   medicHealPerSecond: 6,
   /** Medic heal radius in tiles. */
@@ -98,17 +90,6 @@ export const UNIT_RULES = {
   medicFightBackWindow: 2,
   /** Mage area-of-effect radius in tiles. */
   mageAreaRadius: 1.5,
-};
-
-/**
- * Fighting back: a unit that is attacked goes after its attacker before its
- * normal priorities (only the player's orders come first).
- */
-export const RETALIATION_RULES = {
-  /** A unit remembers who hit it for this many seconds. */
-  memorySeconds: 2,
-  /** Also chase Archers and Mages that hit from a distance? */
-  againstRanged: true,
 };
 
 /** Stance rules. */
