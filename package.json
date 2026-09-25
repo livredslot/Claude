@@ -8,7 +8,8 @@
     "preview": "vite preview --host",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "sim": "tsx scripts/sim.ts"
+    "sim": "tsx scripts/sim.ts",
+    "build:single": "npm run build && node scripts/singlefile.mjs"
   },
   "repository": {
     "type": "git",

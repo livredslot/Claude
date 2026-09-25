@@ -38,6 +38,7 @@ phone connected to the same Wi-Fi to test on mobile.
 | `npm run typecheck` | Check the TypeScript code for type errors |
 | `npm run build` | Build the production version into `dist/` |
 | `npm run preview` | Serve the built `dist/` folder locally |
+| `npm run build:single` | Pack the whole game into ONE file, `release/mystical-armies.html`, to share (opens by double-click, no install) |
 
 ## Project layout
 
