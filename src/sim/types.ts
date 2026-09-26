@@ -84,6 +84,8 @@ export interface BattleResult {
   tick: number;
   /** Remaining army value per team, ×1000 (a full-health value-2 unit = 2000). */
   values: [number, number];
+  /** Each King's HP in ‰ of its max HP at the end (0 = dead). Decides a timeout. */
+  kingHp: [number, number];
   unitsLost: [number, number];
   /** Damage dealt, by unit type, per team (in whole HP). */
   damageByType: [Record<UnitType, number>, Record<UnitType, number>];

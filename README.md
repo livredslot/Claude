@@ -1,21 +1,23 @@
 # Mystical Armies
 
-A 2D auto-battle strategy game. Two armies of 25 units are placed secretly, then fight
-automatically for up to 90 seconds. Built with **Phaser 3**, **Vite** and **TypeScript**.
+A 2D auto-battle strategy game. Two armies (10 groups of 5 soldiers + 1 King = 51 units each)
+are placed secretly, then fight automatically for up to 60 seconds. Built with **Phaser 3**, **Vite** and **TypeScript**.
 
 **Current status: Phase 1 + King + army setup screen.**
 
-- **King:** every army has exactly 1 King (part of the 25). If your King dies, you lose immediately.
+- **King:** every army has exactly 1 King (on top of the 10 groups). If your King dies, you lose immediately.
+  If both Kings survive the 60 seconds, the King with more HP wins; equal HP is a draw.
   The King follows a few tiles behind its army; Medics follow the army itself.
   Every unit simply fights the nearest enemy; only the player's orders change that.
 - **Battle orders:** "Auto" (fight the nearest enemy), "Attack King" (everyone goes for the enemy King)
   or "Keep Formation" (the army marches as a block in the shape you placed it; units break off when they
   find a target). Tap any enemy to make your whole army focus it. Orders are recorded, so replays repeat them.
-- **Stances** (set per unit or for all units on the setup screen): Advance or Flank.
+- **Stances** (set per group or for all groups on the setup screen): Advance or Flank.
 - Units walk through their own army, so fast units aren't stuck behind slow ones.
-- **Army setup:** Step 1 picks how many of each unit (+/−, total 25); Step 2 places them by
-  tapping or dragging in your deployment zone, with stances, Auto-place, Save/Load.
-  PvP gives you 60 seconds (missing units are auto-filled when time runs out); vs AI has no limit.
+- **Army setup:** Step 1 picks 10 groups of 5 (+/−; max 1 group of Medics and of Mages); Step 2 places
+  each group as a vertical line of 5 by tapping (tap a group, then a spot, to move it), with stances,
+  Auto-place, Save/Load. PvP gives you 60 seconds (missing groups are auto-filled when time runs out);
+  vs AI has no limit.
 - The opponent is a fixed practice army until the AI (Phase 5) and online PvP (Phase 8) are built.
 
 ## Getting started
@@ -52,7 +54,7 @@ src/
     compiledConfig.ts    Turns config numbers into integers (sub-tiles, centi-HP, ticks)
     fixed.ts             Integer maths helpers
     rng.ts               Seeded random generator (mulberry32)
-    army.ts              Army validation (25 units, caps, deployment zone)
+    army.ts              Army validation (10 groups of 5 + King, limits, deployment zone)
   data/                  Maps and the hard-coded Phase 1 test armies
   game/armyDraft.ts      Army being built on the setup screen: counts, auto-place, presets
   scenes/MenuScene.ts    Start menu

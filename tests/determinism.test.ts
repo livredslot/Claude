@@ -85,18 +85,20 @@ describe('battle rules', () => {
     expect(validateArmy(noKing, 0, OPEN_PLAINS).join()).toMatch(/King/);
   });
 
-  it('always ends within 90 seconds (1800 ticks) with a valid result', () => {
+  it('always ends within 60 seconds (1200 ticks) with a valid result', () => {
     for (let seed = 1; seed <= 10; seed++) {
       const r = simulateBattle(OPEN_PLAINS, SETUPS, seed);
-      expect(r.tick).toBeLessThanOrEqual(1800);
+      expect(r.tick).toBeLessThanOrEqual(1200);
       if (r.reason === 'king') {
         // Only ends early; the loser's King is dead.
-        expect(r.tick).toBeLessThanOrEqual(1800);
+        expect(r.tick).toBeLessThanOrEqual(1200);
       } else if (r.reason === 'annihilation') {
         expect(r.winner === null ? 0 : r.unitsLost[r.winner === 0 ? 1 : 0]).toBe(r.winner === null ? 0 : 25);
       } else {
-        expect(r.tick).toBe(1800);
-        if (r.winner !== null) expect(r.values[r.winner]).toBeGreaterThan(r.values[r.winner === 0 ? 1 : 0]);
+        // Time's up with both Kings alive: the King with more HP wins, equal HP is a draw.
+        expect(r.tick).toBe(1200);
+        if (r.winner === null) expect(r.kingHp[0]).toBe(r.kingHp[1]);
+        else expect(r.kingHp[r.winner]).toBeGreaterThan(r.kingHp[r.winner === 0 ? 1 : 0]);
       }
     }
   });
@@ -122,5 +124,35 @@ describe('battle rules', () => {
     const ms = (performance.now() - start) / n;
     console.log(`average headless battle: ${ms.toFixed(1)} ms`);
     expect(ms).toBeLessThan(500);
+  });
+});
+
+describe('time-out rule (both Kings alive after 60 s)', () => {
+  const kingsOnly = (hpBlue: number, hpRed: number) => {
+    // Two lone Kings far apart; set their HP directly, then let the clock run out.
+    const b = new Battle(
+      OPEN_PLAINS,
+      [{ units: [{ type: 'king', tx: 0, ty: 0 }] }, { units: [{ type: 'king', tx: 39, ty: 19 }] }],
+      1,
+    );
+    b.units[b.kingIds[0]].hp = hpBlue;
+    b.units[b.kingIds[1]].hp = hpRed;
+    b.tick = b.maxTicks - 1; // jump to the last tick so the Kings can't reach each other
+    return b.runToEnd();
+  };
+
+  it('both Kings at full HP: draw', () => {
+    const r = kingsOnly(20000, 20000);
+    expect(r.reason).toBe('timeout');
+    expect(r.winner).toBeNull();
+  });
+
+  it('the King with more HP wins', () => {
+    expect(kingsOnly(15000, 9000).winner).toBe(0);
+    expect(kingsOnly(9000, 15000).winner).toBe(1);
+  });
+
+  it('same HP (not full): draw', () => {
+    expect(kingsOnly(12000, 12000).winner).toBeNull();
   });
 });

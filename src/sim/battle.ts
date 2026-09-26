@@ -829,6 +829,12 @@ export class Battle {
     return v;
   }
 
+  /** King HP as ‰ of max (1000 = full, 0 = dead or no King). */
+  kingHpPermille(team: Team): number {
+    const k = this.king(team);
+    return k ? Math.floor((k.hp * 1000) / k.stats.maxHp) : 0;
+  }
+
   aliveCount(team: Team): number {
     let n = 0;
     for (const u of this.units) if (u.alive && u.team === team) n++;
@@ -850,9 +856,19 @@ export class Battle {
       winner = a0 === 0 && a1 === 0 ? null : a0 === 0 ? 1 : 0;
     } else if (this.tick >= C.maxTicks) {
       reason = 'timeout';
-      const v0 = this.armyValue(0);
-      const v1 = this.armyValue(1);
-      winner = v0 === v1 ? null : v0 > v1 ? 0 : 1;
+      const k0 = this.king(0);
+      const k1 = this.king(1);
+      if (k0 && k1) {
+        // Both Kings alive: the healthier King (by % of max HP) wins; equal is a draw.
+        const a = k0.hp * k1.stats.maxHp;
+        const b = k1.hp * k0.stats.maxHp;
+        winner = a === b ? null : a > b ? 0 : 1;
+      } else {
+        // Armies without Kings (only used in tests): remaining army value decides.
+        const v0 = this.armyValue(0);
+        const v1 = this.armyValue(1);
+        winner = v0 === v1 ? null : v0 > v1 ? 0 : 1;
+      }
     } else {
       return;
     }
@@ -863,6 +879,7 @@ export class Battle {
       reason,
       tick: this.tick,
       values: [this.armyValue(0), this.armyValue(1)],
+      kingHp: [this.kingHpPermille(0), this.kingHpPermille(1)],
       unitsLost: [this.unitsLost[0], this.unitsLost[1]],
       damageByType: [toHp(this.damageByType[0]), toHp(this.damageByType[1])],
       hash: this.stateHash(),

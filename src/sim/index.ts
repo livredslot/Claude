@@ -1,5 +1,5 @@
 export { Battle, simulateBattle, applyRecordedCommands, type Unit } from './battle';
-export { validateArmy, deployColumns, mirrorSetup } from './army';
+export { validateArmy, deployColumns, mirrorSetup, armySize } from './army';
 export { Rng } from './rng';
 export { SUB, HP_SCALE } from './fixed';
 export { STATS, C as SIM_CONSTANTS } from './compiledConfig';

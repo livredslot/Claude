@@ -254,24 +254,24 @@ export class BattleScene extends Phaser.Scene {
       .setOrigin(0.5, 0);
     this.valueTexts = [
       this.add
-        .text(330, 62, '', { fontFamily: FONT, fontSize: '18px', color: '#93c5fd', fontStyle: 'bold' })
+        .text(390, 62, '', { fontFamily: FONT, fontSize: '16px', color: '#93c5fd', fontStyle: 'bold', align: 'right' })
         .setOrigin(1, 0.5),
       this.add
-        .text(950, 62, '', { fontFamily: FONT, fontSize: '18px', color: '#fca5a5', fontStyle: 'bold' })
+        .text(890, 62, '', { fontFamily: FONT, fontSize: '16px', color: '#fca5a5', fontStyle: 'bold' })
         .setOrigin(0, 0.5),
     ];
     this.add
-      .text(GAME_W / 2, 84, 'Army value', { fontFamily: FONT, fontSize: '13px', color: '#94a3b8' })
+      .text(GAME_W / 2, 84, 'Army strength  ·  King HP decides if time runs out', { fontFamily: FONT, fontSize: '13px', color: '#94a3b8' })
       .setOrigin(0.5, 0.5);
 
     makeButton(this, 16, 22, 150, 56, 'Menu', () => this.scene.start('Menu'));
     this.add.text(16, 90, `Seed ${this.record.seed}`, { fontFamily: FONT, fontSize: '12px', color: '#64748b' }).setOrigin(0, 0.5);
 
-    this.speedButton = makeButton(this, 996, 22, 130, 56, `Speed ${this.speed}×`, () => {
+    this.speedButton = makeButton(this, 1026, 22, 116, 56, `Speed ${this.speed}×`, () => {
       this.speed = this.speed === 1 ? 2 : 1;
       this.speedButton.setLabel(`Speed ${this.speed}×`);
     });
-    makeButton(this, 1136, 22, 128, 56, 'Debug', () => {
+    makeButton(this, 1150, 22, 114, 56, 'Debug', () => {
       this.debug = !this.debug;
       this.debugText.setVisible(this.debug);
     });
@@ -505,13 +505,14 @@ export class BattleScene extends Phaser.Scene {
 
     const v0 = b.armyValue(0);
     const v1 = b.armyValue(1);
-    this.valueTexts[0].setText(`${TEAM_NAMES[0]} ${(v0 / 1000).toFixed(1)}  (${b.aliveCount(0)})`);
-    this.valueTexts[1].setText(`(${b.aliveCount(1)})  ${(v1 / 1000).toFixed(1)} ${TEAM_NAMES[1]}`);
+    const kingPct = (t: 0 | 1) => Math.ceil(b.kingHpPermille(t) / 10);
+    this.valueTexts[0].setText(`${TEAM_NAMES[0]} · ${b.aliveCount(0)} units\nKing ${kingPct(0)}%`);
+    this.valueTexts[1].setText(`${b.aliveCount(1)} units · ${TEAM_NAMES[1]}\nKing ${kingPct(1)}%`);
 
     const g = this.gHud;
     g.clear();
-    const x = 340;
-    const w = 600;
+    const x = 400;
+    const w = 480;
     const y = 52;
     const h = 20;
     const share = v0 + v1 > 0 ? v0 / (v0 + v1) : 0.5;
@@ -582,7 +583,9 @@ export class BattleScene extends Phaser.Scene {
           : `${loser}'s King has fallen after ${secs} s`
         : r.reason === 'annihilation'
         ? `All enemy units defeated after ${secs} s`
-        : `Time's up — higher remaining army value (${(r.values[0] / 1000).toFixed(2)} vs ${(r.values[1] / 1000).toFixed(2)})`;
+        : r.winner === null
+          ? `Time's up: both Kings have the same HP (${(r.kingHp[0] / 10).toFixed(1)}%)`
+          : `Time's up: ${TEAM_NAMES[r.winner]}'s King has more HP (${(r.kingHp[r.winner] / 10).toFixed(1)}% vs ${(r.kingHp[r.winner === 0 ? 1 : 0] / 10).toFixed(1)}%)`;
 
     panel.add(
       this.add.text(GAME_W / 2, y0 + 24, title, { fontFamily: FONT, fontSize: '44px', color: titleColor, fontStyle: 'bold' }).setOrigin(0.5, 0),

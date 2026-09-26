@@ -108,18 +108,19 @@ export const STANCE_RULES = {
 
 /** Army composition rules. */
 export const ARMY_RULES = {
-  size: 25,
-  maxPerType: {
-    swordsman: 25,
-    spearman: 25,
-    horseman: 25,
-    archer: 25,
-    medic: 5,
-    mage: 3,
-    king: 1,
-  } as Record<UnitType, number>,
-  /** Every army must contain exactly this many of these units. */
-  required: { king: 1 } as Partial<Record<UnitType, number>>,
+  /** Soldiers are picked in groups of this many identical units. */
+  groupSize: 5,
+  /** Each army has exactly this many groups (10 × 5 = 50 soldiers), plus 1 King. */
+  groups: 10,
+  /** Most groups allowed per unit type. */
+  maxGroups: {
+    swordsman: 10,
+    spearman: 10,
+    horseman: 10,
+    archer: 10,
+    medic: 1,
+    mage: 1,
+  } as Record<Exclude<UnitType, 'king'>, number>,
   /** Deployment zone: this many columns nearest each player's own map edge. */
   deployColumns: 6,
 };
@@ -130,12 +131,12 @@ export const SETUP_RULES = {
   pvpTimeLimit: 60,
   /** Seconds to choose and place the army against the AI. 0 = no limit. */
   aiTimeLimit: 0,
-  /** Starting unit counts on the setup screen (must add up to the army size). */
-  defaultCounts: { swordsman: 6, spearman: 4, horseman: 3, archer: 6, medic: 3, mage: 2, king: 1 } as Record<
+  /** Starting number of GROUPS per type on the setup screen (must add up to ARMY_RULES.groups; King is always 1). */
+  defaultCounts: { swordsman: 2, spearman: 2, horseman: 2, archer: 2, medic: 1, mage: 1, king: 1 } as Record<
     UnitType,
     number
   >,
-  /** When time runs out, missing units are filled with this type. */
+  /** When time runs out, missing groups are filled with this type. */
   autoFillType: 'swordsman' as UnitType,
 };
 
@@ -148,8 +149,11 @@ export const MAP_RULES = {
 /** Core simulation settings. Changing these changes every battle result. */
 export const SIM_RULES = {
   ticksPerSecond: 20,
-  /** 90 seconds. */
-  maxBattleSeconds: 90,
+  /**
+   * Battle length. If both Kings are still alive when time runs out, the King
+   * with more HP (as a % of its max HP) wins; equal HP is a draw.
+   */
+  maxBattleSeconds: 60,
   /** Units re-pick their target this often (seconds), or when the target dies. */
   retargetInterval: 1.0,
   /** Collision radius of every unit, in tiles (units cannot overlap). */

@@ -1,61 +1,67 @@
 /**
  * The army a player is building on the setup screen (not part of the simulation).
+ *
+ * Soldiers are picked and placed in GROUPS of 5 identical units, standing in a
+ * vertical line (5 rows in one column). The King is a single unit on its own.
  * Always stored in Blue/left-side coordinates: columns 0..5, column 5 = front.
  */
 import { ARMY_RULES, SETUP_RULES, UNIT_TYPES, UNITS, type UnitType } from '../config/gameConfig';
 import type { ArmySetup, Stance } from '../sim/types';
 
+/** Number of GROUPS per type (King: always 1, and a "group" of one). */
 export type Counts = Record<UnitType, number>;
 
-export interface PlacedUnit {
+/** A placed group: `size` units in one column, rows ty .. ty+size-1. */
+export interface PlacedGroup {
   type: UnitType;
   stance: Stance;
+  tx: number;
+  /** Top row of the group. */
+  ty: number;
 }
 
 export interface ArmyDraft {
   counts: Counts;
-  /** Key "tx,ty" → unit on that tile. */
-  placed: Map<string, PlacedUnit>;
+  groups: PlacedGroup[];
 }
 
 export const ZONE_COLS = ARMY_RULES.deployColumns;
+export const GROUP_SIZE = ARMY_RULES.groupSize;
 
-export function tileKey(tx: number, ty: number): string {
-  return `${tx},${ty}`;
-}
-
-export function parseKey(key: string): [number, number] {
-  const [x, y] = key.split(',').map(Number);
-  return [x, y];
+/** Units in one pick of this type (the King is on its own). */
+export function groupSize(type: UnitType): number {
+  return type === 'king' ? 1 : GROUP_SIZE;
 }
 
 export function newDraft(): ArmyDraft {
-  return { counts: { ...SETUP_RULES.defaultCounts }, placed: new Map() };
+  return { counts: { ...SETUP_RULES.defaultCounts }, groups: [] };
 }
 
-export function totalCount(counts: Counts): number {
-  return UNIT_TYPES.reduce((sum, t) => sum + counts[t], 0);
+/** Total soldier groups chosen (the King is not counted). */
+export function totalGroups(counts: Counts): number {
+  return UNIT_TYPES.reduce((sum, t) => sum + (t === 'king' ? 0 : counts[t]), 0);
 }
 
-/** Lowest and highest allowed count for a type. */
+/** Lowest and highest allowed number of groups for a type. */
 export function countLimits(type: UnitType): [number, number] {
-  const req = ARMY_RULES.required[type];
-  if (req !== undefined) return [req, req];
-  return [0, ARMY_RULES.maxPerType[type]];
+  if (type === 'king') return [1, 1];
+  return [0, ARMY_RULES.maxGroups[type]];
 }
 
 export function canIncrease(counts: Counts, type: UnitType): boolean {
-  return counts[type] < countLimits(type)[1] && totalCount(counts) < ARMY_RULES.size;
+  return type !== 'king' && counts[type] < countLimits(type)[1] && totalGroups(counts) < ARMY_RULES.groups;
 }
 
 export function canDecrease(counts: Counts, type: UnitType): boolean {
   return counts[type] > countLimits(type)[0];
 }
 
+export function countsComplete(counts: Counts): boolean {
+  return totalGroups(counts) === ARMY_RULES.groups && counts.king === 1;
+}
+
 export function placedOfType(draft: ArmyDraft, type: UnitType): number {
-  let n = 0;
-  for (const u of draft.placed.values()) if (u.type === type) n++;
-  return n;
+  return draft.groups.filter((g) => g.type === type).length;
 }
 
 export function remainingToPlace(draft: ArmyDraft, type: UnitType): number {
@@ -63,22 +69,46 @@ export function remainingToPlace(draft: ArmyDraft, type: UnitType): number {
 }
 
 export function allPlaced(draft: ArmyDraft): boolean {
-  return totalCount(draft.counts) === ARMY_RULES.size && draft.placed.size === ARMY_RULES.size;
+  return countsComplete(draft.counts) && UNIT_TYPES.every((t) => remainingToPlace(draft, t) === 0);
 }
 
-/** Remove placed units that exceed the chosen counts (after counts were lowered). */
+/** The tiles a group covers. */
+export function groupTiles(g: { type: UnitType; tx: number; ty: number }): [number, number][] {
+  return Array.from({ length: groupSize(g.type) }, (_, i) => [g.tx, g.ty + i] as [number, number]);
+}
+
+/** The group covering a tile, or -1. */
+export function groupAt(draft: ArmyDraft, tx: number, ty: number): number {
+  return draft.groups.findIndex((g) => g.tx === tx && ty >= g.ty && ty < g.ty + groupSize(g.type));
+}
+
+/**
+ * Top row for a group of this type centred on row `centreRow`, pushed inside the
+ * map if it would stick out at the top or bottom.
+ */
+export function topRowFor(type: UnitType, centreRow: number, height: number): number {
+  const size = groupSize(type);
+  return Math.min(Math.max(centreRow - Math.floor(size / 2), 0), height - size);
+}
+
+/** Can a group of `type` stand at (tx, ty..)? `ignore` = index of a group to ignore (the one being moved). */
+export function fits(draft: ArmyDraft, type: UnitType, tx: number, ty: number, height: number, ignore = -1): boolean {
+  if (tx < 0 || tx >= ZONE_COLS || ty < 0 || ty + groupSize(type) > height) return false;
+  return groupTiles({ type, tx, ty }).every(([x, y]) => {
+    const at = groupAt(draft, x, y);
+    return at < 0 || at === ignore;
+  });
+}
+
+/** Remove placed groups beyond the chosen counts (after counts were lowered), back of the formation first. */
 export function trimToCounts(draft: ArmyDraft): void {
   for (const type of UNIT_TYPES) {
     let excess = placedOfType(draft, type) - draft.counts[type];
     if (excess <= 0) continue;
-    // Remove from the back of the formation first.
-    const keys = [...draft.placed.entries()]
-      .filter(([, u]) => u.type === type)
-      .map(([k]) => k)
-      .sort((a, b) => parseKey(a)[0] - parseKey(b)[0]);
-    for (const k of keys) {
+    const byBackFirst = draft.groups.filter((g) => g.type === type).sort((a, b) => a.tx - b.tx);
+    for (const g of byBackFirst) {
       if (excess-- <= 0) break;
-      draft.placed.delete(k);
+      draft.groups.splice(draft.groups.indexOf(g), 1);
     }
   }
 }
@@ -98,9 +128,9 @@ function centreOut(height: number): number[] {
   return rows;
 }
 
-/** Rows ordered from the edges inward: 1, 18, 2, 17, ... (the very edge rows last). */
+/** Rows ordered from the edges inward: 0, 19, 1, 18, ... */
 function edgesIn(height: number): number[] {
-  const edgeDist = (r: number) => (r === 0 || r === height - 1 ? height : Math.min(r, height - 1 - r));
+  const edgeDist = (r: number) => Math.min(r, height - 1 - r);
   return Array.from({ length: height }, (_, r) => r).sort((a, b) => edgeDist(a) - edgeDist(b) || a - b);
 }
 
@@ -112,13 +142,14 @@ interface Slot {
 }
 
 /**
- * Fill the unplaced units into the free tiles:
+ * Place every not-yet-placed group into free space:
  *  front (col 5): Spearmen in the middle, Swordsmen beside them
  *  col 4: Horsemen on the wings
- *  col 3: Archers   col 2: Medics   col 1: Mages   col 0: King (centre, well protected)
- * Units spill into neighbouring columns when a column is full.
+ *  col 3: Archers   col 2: Medics   col 1: Mages   col 0: King (centre)
+ * Groups spill into neighbouring columns when a column is full.
+ * Returns false if some group could not be placed (no room).
  */
-export function autoPlace(draft: ArmyDraft, height: number): void {
+export function autoPlace(draft: ArmyDraft, height: number, stance: Stance = 'advance'): boolean {
   const order: Slot[] = [
     { type: 'king', cols: [0, 1, 2, 3, 4, 5], rows: 'centre' },
     { type: 'spearman', cols: [5, 4, 3, 2, 1, 0], rows: 'centre' },
@@ -128,51 +159,56 @@ export function autoPlace(draft: ArmyDraft, height: number): void {
     { type: 'medic', cols: [2, 1, 3, 0, 4, 5], rows: 'centre' },
     { type: 'mage', cols: [1, 2, 0, 3, 4, 5], rows: 'centre' },
   ];
-  const centre = centreOut(height);
-  const edges = edgesIn(height);
+  let ok = true;
   for (const slot of order) {
-    let left = remainingToPlace(draft, slot.type);
-    const rows = slot.rows === 'centre' ? centre : edges;
-    for (const col of slot.cols) {
-      for (const row of rows) {
-        if (left <= 0) break;
-        const key = tileKey(col, row);
-        if (draft.placed.has(key)) continue;
-        draft.placed.set(key, { type: slot.type, stance: 'advance' });
-        left--;
+    const rows = slot.rows === 'centre' ? centreOut(height) : edgesIn(height);
+    for (let left = remainingToPlace(draft, slot.type); left > 0; left--) {
+      let placed = false;
+      for (const col of slot.cols) {
+        for (const row of rows) {
+          const ty = topRowFor(slot.type, row, height);
+          if (fits(draft, slot.type, col, ty, height)) {
+            draft.groups.push({ type: slot.type, stance, tx: col, ty });
+            placed = true;
+            break;
+          }
+        }
+        if (placed) break;
       }
+      if (!placed) ok = false;
     }
   }
+  return ok;
 }
 
 /**
- * Used when the setup timer runs out: top up the counts to 25 with the
- * default filler unit, then auto-place anything not yet on the map.
+ * Used when the setup timer runs out: top up to the full number of groups with
+ * the default filler type, then auto-place anything not yet on the map.
  */
 export function autoComplete(draft: ArmyDraft, height: number): void {
   for (const type of UNIT_TYPES) {
     const [min, max] = countLimits(type);
     draft.counts[type] = Math.min(Math.max(draft.counts[type], min), max);
   }
-  let missing = ARMY_RULES.size - totalCount(draft.counts);
   const fillers: UnitType[] = [SETUP_RULES.autoFillType, ...UNIT_TYPES];
   for (const type of fillers) {
-    while (missing > 0 && canIncrease(draft.counts, type)) {
-      draft.counts[type]++;
-      missing--;
-    }
+    while (totalGroups(draft.counts) < ARMY_RULES.groups && canIncrease(draft.counts, type)) draft.counts[type]++;
   }
   trimToCounts(draft);
   autoPlace(draft, height);
 }
 
-/** Convert the draft to a simulation setup for the given side of the map. */
+/** Convert the draft to a simulation setup (individual units) for the given side of the map. */
 export function draftToSetup(draft: ArmyDraft, side: 0 | 1, mapWidth: number): ArmySetup {
   return {
-    units: [...draft.placed.entries()].map(([key, u]) => {
-      const [tx, ty] = parseKey(key);
-      return { type: u.type, tx: side === 0 ? tx : mapWidth - 1 - tx, ty, stance: u.stance };
-    }),
+    units: draft.groups.flatMap((g) =>
+      groupTiles(g).map(([tx, ty]) => ({
+        type: g.type,
+        tx: side === 0 ? tx : mapWidth - 1 - tx,
+        ty,
+        stance: g.stance,
+      })),
+    ),
   };
 }
 
@@ -180,16 +216,17 @@ export function draftToSetup(draft: ArmyDraft, side: 0 | 1, mapWidth: number): A
 // Presets saved in the browser.
 // ---------------------------------------------------------------------------
 
-const PRESET_KEY = 'mystical-armies.preset.v1';
+/** v2 = groups of 5 (v1 saves stored single units and are ignored). */
+const PRESET_KEY = 'mystical-armies.preset.v2';
 
 interface SavedDraft {
   counts: Counts;
-  placed: [string, PlacedUnit][];
+  groups: PlacedGroup[];
 }
 
 export function savePreset(draft: ArmyDraft): boolean {
   try {
-    const data: SavedDraft = { counts: draft.counts, placed: [...draft.placed.entries()] };
+    const data: SavedDraft = { counts: draft.counts, groups: draft.groups };
     localStorage.setItem(PRESET_KEY, JSON.stringify(data));
     return true;
   } catch {
@@ -198,21 +235,19 @@ export function savePreset(draft: ArmyDraft): boolean {
 }
 
 /** Returns null if nothing is saved (or the save is unreadable). */
-export function loadPreset(): ArmyDraft | null {
+export function loadPreset(height: number): ArmyDraft | null {
   try {
     const raw = localStorage.getItem(PRESET_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw) as SavedDraft;
     const counts = { ...SETUP_RULES.defaultCounts };
     for (const t of UNIT_TYPES) if (typeof data.counts?.[t] === 'number') counts[t] = data.counts[t];
-    const placed = new Map<string, PlacedUnit>();
-    for (const [k, u] of data.placed ?? []) {
-      if (!UNITS[u.type]) continue;
-      // Removed stances ('hold') in older saves fall back to 'advance'.
-      const stance = u.stance === 'flank' ? 'flank' : 'advance';
-      placed.set(k, { type: u.type, stance });
+    const draft: ArmyDraft = { counts, groups: [] };
+    for (const g of data.groups ?? []) {
+      if (!UNITS[g.type]) continue;
+      const stance: Stance = g.stance === 'flank' ? 'flank' : 'advance';
+      if (fits(draft, g.type, g.tx, g.ty, height)) draft.groups.push({ type: g.type, stance, tx: g.tx, ty: g.ty });
     }
-    const draft = { counts, placed };
     trimToCounts(draft);
     return draft;
   } catch {

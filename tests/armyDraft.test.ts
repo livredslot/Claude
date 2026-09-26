@@ -5,81 +5,99 @@ import {
   allPlaced,
   canIncrease,
   draftToSetup,
+  fits,
+  groupAt,
   newDraft,
-  totalCount,
+  totalGroups,
   trimToCounts,
-  tileKey,
+  topRowFor,
 } from '../src/game/armyDraft';
 import { OPEN_PLAINS } from '../src/data/maps';
-import { validateArmy, simulateBattle } from '../src/sim';
+import { validateArmy, simulateBattle, armySize } from '../src/sim';
 import { TEST_ARMY_RED } from '../src/data/testArmies';
 import { UNIT_TYPES } from '../src/config/gameConfig';
 
 const H = OPEN_PLAINS.height;
 
-describe('army draft', () => {
-  it('default counts add up to 25 with one King', () => {
+describe('army draft (groups of 5)', () => {
+  it('default counts are 10 groups plus the King = 51 units', () => {
     const d = newDraft();
-    expect(totalCount(d.counts)).toBe(25);
+    expect(totalGroups(d.counts)).toBe(10);
     expect(d.counts.king).toBe(1);
+    expect(armySize()).toBe(51);
   });
 
-  it('auto-place gives a valid army on either side', () => {
+  it('auto-place gives a valid army on either side, groups as vertical lines of 5', () => {
     const d = newDraft();
-    autoPlace(d, H);
+    expect(autoPlace(d, H)).toBe(true);
     expect(allPlaced(d)).toBe(true);
-    expect(validateArmy(draftToSetup(d, 0, OPEN_PLAINS.width), 0, OPEN_PLAINS)).toEqual([]);
+    const setup = draftToSetup(d, 0, OPEN_PLAINS.width);
+    expect(setup.units.length).toBe(51);
+    expect(validateArmy(setup, 0, OPEN_PLAINS)).toEqual([]);
     expect(validateArmy(draftToSetup(d, 1, OPEN_PLAINS.width), 1, OPEN_PLAINS)).toEqual([]);
-    // King sits at the back, centre.
-    expect(d.placed.get(tileKey(0, 10))?.type).toBe('king');
+    for (const g of d.groups) {
+      const tiles = setup.units.filter((u) => u.type === g.type && u.tx === g.tx && u.ty >= g.ty && u.ty < g.ty + 5);
+      expect(tiles.length).toBe(g.type === 'king' ? 1 : 5);
+    }
   });
 
-  it('auto-place handles extreme mixes (24 of one type)', () => {
+  it('auto-place handles extreme mixes (10 groups of one type)', () => {
     for (const type of ['swordsman', 'archer', 'horseman', 'spearman'] as const) {
       const d = newDraft();
       for (const t of UNIT_TYPES) d.counts[t] = t === 'king' ? 1 : 0;
-      d.counts[type] = 24;
-      autoPlace(d, H);
+      d.counts[type] = 10;
+      expect(autoPlace(d, H)).toBe(true);
       expect(validateArmy(draftToSetup(d, 0, OPEN_PLAINS.width), 0, OPEN_PLAINS)).toEqual([]);
     }
   });
 
-  it('auto-place keeps units the player already placed', () => {
+  it('auto-place keeps groups the player already placed', () => {
     const d = newDraft();
-    d.placed.set(tileKey(5, 0), { type: 'mage', stance: 'flank' });
+    d.groups.push({ type: 'mage', stance: 'flank', tx: 5, ty: 0 });
     autoPlace(d, H);
-    expect(d.placed.get(tileKey(5, 0))).toEqual({ type: 'mage', stance: 'flank' });
+    expect(d.groups[0]).toEqual({ type: 'mage', stance: 'flank', tx: 5, ty: 0 });
     expect(allPlaced(d)).toBe(true);
   });
 
-  it('caps stop the counts from going over the limits', () => {
+  it('groups cannot overlap or stick out of the zone', () => {
     const d = newDraft();
-    for (const t of UNIT_TYPES) d.counts[t] = t === 'king' ? 1 : 0;
-    d.counts.medic = 5;
-    expect(canIncrease(d.counts, 'medic')).toBe(false);
-    expect(canIncrease(d.counts, 'king')).toBe(false);
-    expect(canIncrease(d.counts, 'archer')).toBe(true);
+    d.groups.push({ type: 'archer', stance: 'advance', tx: 2, ty: 5 }); // rows 5-9
+    expect(fits(d, 'swordsman', 2, 9, H)).toBe(false); // overlaps row 9
+    expect(fits(d, 'swordsman', 2, 10, H)).toBe(true);
+    expect(fits(d, 'swordsman', 6, 0, H)).toBe(false); // outside the zone
+    expect(fits(d, 'swordsman', 0, 16, H)).toBe(false); // would reach row 20
+    expect(topRowFor('swordsman', 19, H)).toBe(15); // tapped near the bottom: pushed up
+    expect(groupAt(d, 2, 7)).toBe(0);
   });
 
-  it('time-out auto-complete turns an empty/partial setup into a valid army', () => {
+  it('limits: max 1 group of Medics and of Mages, max 10 groups total', () => {
     const d = newDraft();
-    for (const t of UNIT_TYPES) d.counts[t] = 0; // even the King missing
+    for (const t of UNIT_TYPES) d.counts[t] = t === 'king' ? 1 : 0;
+    d.counts.medic = 1;
+    expect(canIncrease(d.counts, 'medic')).toBe(false);
+    expect(canIncrease(d.counts, 'king')).toBe(false);
+    d.counts.archer = 9;
+    expect(canIncrease(d.counts, 'archer')).toBe(false); // 10 groups reached
+  });
+
+  it('time-out auto-complete turns a partial setup into a valid army', () => {
+    const d = newDraft();
+    for (const t of UNIT_TYPES) d.counts[t] = 0;
     d.counts.archer = 3;
-    d.placed.set(tileKey(3, 3), { type: 'archer', stance: 'advance' });
+    d.groups.push({ type: 'archer', stance: 'advance', tx: 3, ty: 3 });
     autoComplete(d, H);
     const setup = draftToSetup(d, 0, OPEN_PLAINS.width);
     expect(validateArmy(setup, 0, OPEN_PLAINS)).toEqual([]);
-    expect(d.placed.get(tileKey(3, 3))?.type).toBe('archer');
-    // And it can actually fight.
+    expect(groupAt(d, 3, 3)).toBeGreaterThanOrEqual(0);
     expect(simulateBattle(OPEN_PLAINS, [setup, TEST_ARMY_RED], 1).tick).toBeGreaterThan(0);
   });
 
-  it('lowering a count removes extra placed units', () => {
+  it('lowering a count removes extra placed groups', () => {
     const d = newDraft();
     autoPlace(d, H);
-    d.counts.archer = 2;
-    d.counts.swordsman += 4;
+    d.counts.archer = 1;
+    d.counts.swordsman += 1;
     trimToCounts(d);
-    expect([...d.placed.values()].filter((u) => u.type === 'archer').length).toBe(2);
+    expect(d.groups.filter((g) => g.type === 'archer').length).toBe(1);
   });
 });

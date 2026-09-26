@@ -1,7 +1,7 @@
 /**
  * Army setup screen, in two steps:
- *   1. Counts: choose how many of each unit (+/−), exactly 25 including 1 King.
- *   2. Place: tap/drag units onto your deployment zone, set stances.
+ *   1. Counts: choose how many GROUPS of 5 of each unit (+/−), exactly 10 groups, plus 1 King.
+ *   2. Place: tap to place each group (a vertical line of 5) in your deployment zone, set stances.
  * In PvP there is a time limit; when it runs out the army is auto-completed and locked in.
  */
 import Phaser from 'phaser';
@@ -15,17 +15,23 @@ import {
   canDecrease,
   canIncrease,
   countLimits,
+  countsComplete,
   draftToSetup,
+  fits,
+  GROUP_SIZE,
+  groupAt,
+  groupSize,
+  groupTiles,
   loadPreset,
   newDraft,
-  parseKey,
   remainingToPlace,
   savePreset,
-  tileKey,
-  totalCount,
+  topRowFor,
+  totalGroups,
   trimToCounts,
   ZONE_COLS,
   type ArmyDraft,
+  type PlacedGroup,
 } from '../game/armyDraft';
 import { validateArmy } from '../sim';
 import type { Stance } from '../sim/types';
@@ -74,10 +80,11 @@ export class SetupScene extends Phaser.Scene {
   private selectedType: UnitType | null = null;
   /** Stance given to newly placed units (changed by the "all units" stance buttons). */
   private defaultStance: Stance = 'advance';
-  private selectedKey: string | null = null;
-  private dragKey: string | null = null;
+  /** The placed group that is selected (to move, change stance or remove), if any. */
+  private selected: PlacedGroup | null = null;
+  /** The group under the finger when the press started (for tap-to-select and drag). */
+  private pressed: PlacedGroup | null = null;
   private dragMoved = false;
-  private painting = false;
   private gridGfx!: Phaser.GameObjects.Graphics;
   private unitLayer!: Phaser.GameObjects.Container;
 
@@ -93,7 +100,7 @@ export class SetupScene extends Phaser.Scene {
     this.stepObjects = [];
     this.refreshers = [];
     this.selectedType = null;
-    this.selectedKey = null;
+    this.selected = null;
     const limit = this.mode === 'pvp' ? SETUP_RULES.pvpTimeLimit : SETUP_RULES.aiTimeLimit;
     this.deadline = limit > 0 ? Date.now() + limit * 1000 : 0;
   }
@@ -177,13 +184,13 @@ export class SetupScene extends Phaser.Scene {
   }
 
   // ======================================================================
-  // Step 1: counts
+  // Step 1: counts (in groups of 5)
   // ======================================================================
 
   private showCounts(): void {
     this.clearStep();
     this.step = 'counts';
-    this.titleText.setText('Step 1 of 2 · How many of each unit?');
+    this.titleText.setText(`Step 1 of 2 · Pick ${ARMY_RULES.groups} groups of ${GROUP_SIZE}`);
 
     const rowH = 78;
     const top = HEADER_H + 14;
@@ -206,8 +213,8 @@ export class SetupScene extends Phaser.Scene {
         }),
       );
 
-      const [min, max] = countLimits(type);
-      const capText = min === max ? `exactly ${min}` : max < ARMY_RULES.size ? `max ${max}` : '';
+      const [, max] = countLimits(type);
+      const capText = type === 'king' ? 'always 1' : max < ARMY_RULES.groups ? `max ${max} group` : '';
       this.keep(
         this.add.text(GAME_W - 330, y + rowH / 2 - 3, capText, { fontFamily: FONT, fontSize: '16px', color: '#94a3b8' }).setOrigin(1, 0.5),
       );
@@ -215,12 +222,21 @@ export class SetupScene extends Phaser.Scene {
       const minus = this.button(GAME_W - 310, y + 6, 72, rowH - 18, '−', () => this.changeCount(type, -1), 34);
       const countText = this.keep(
         this.add
-          .text(GAME_W - 190, y + rowH / 2 - 3, '', { fontFamily: FONT, fontSize: '32px', color: '#f8fafc', fontStyle: 'bold' })
+          .text(GAME_W - 190, y + rowH / 2 - 3, '', { fontFamily: FONT, fontSize: '26px', color: '#f8fafc', fontStyle: 'bold', align: 'center' })
           .setOrigin(0.5),
       );
+      const unitsText = this.keep(
+        this.add.text(GAME_W - 190, y + rowH - 16, '', { fontFamily: FONT, fontSize: '13px', color: '#94a3b8' }).setOrigin(0.5),
+      );
       const plus = this.button(GAME_W - 144, y + 6, 72, rowH - 18, '+', () => this.changeCount(type, +1), 34);
+      if (type === 'king') {
+        minus.container.setVisible(false);
+        plus.container.setVisible(false);
+      }
       this.refreshers.push(() => {
-        countText.setText(String(this.draft.counts[type]));
+        const n = this.draft.counts[type];
+        countText.setText(String(n));
+        unitsText.setText(type === 'king' ? '1 unit' : `${n * GROUP_SIZE} units`);
         minus.setEnabled(canDecrease(this.draft.counts, type));
         plus.setEnabled(canIncrease(this.draft.counts, type));
       });
@@ -228,7 +244,7 @@ export class SetupScene extends Phaser.Scene {
 
     const by = top + UNIT_TYPES.length * rowH + 8;
     const totalText = this.keep(
-      this.add.text(24, by + 30, '', { fontFamily: FONT, fontSize: '28px', color: '#f8fafc', fontStyle: 'bold' }).setOrigin(0, 0.5),
+      this.add.text(24, by + 30, '', { fontFamily: FONT, fontSize: '24px', color: '#f8fafc', fontStyle: 'bold' }).setOrigin(0, 0.5),
     );
     this.button(470, by, 170, 60, 'Menu', () => this.scene.start('Menu'));
     this.button(656, by, 250, 60, 'Suggested mix', () => {
@@ -237,10 +253,10 @@ export class SetupScene extends Phaser.Scene {
     });
     const next = this.button(GAME_W - 24 - 330, by, 330, 60, 'Next: place units  ▶', () => this.showPlace(), 22);
     this.refreshers.push(() => {
-      const total = totalCount(this.draft.counts);
-      totalText.setText(`Total ${total} / ${ARMY_RULES.size}`);
-      totalText.setColor(total === ARMY_RULES.size ? '#86efac' : '#fca5a5');
-      next.setEnabled(total === ARMY_RULES.size);
+      const total = totalGroups(this.draft.counts);
+      totalText.setText(`Groups ${total} / ${ARMY_RULES.groups}  (+ King)`);
+      totalText.setColor(countsComplete(this.draft.counts) ? '#86efac' : '#fca5a5');
+      next.setEnabled(countsComplete(this.draft.counts));
     });
     this.refresh();
   }
@@ -253,15 +269,15 @@ export class SetupScene extends Phaser.Scene {
   }
 
   // ======================================================================
-  // Step 2: placement
+  // Step 2: placement (each group = a vertical line of 5)
   // ======================================================================
 
   private showPlace(): void {
     this.clearStep();
     this.step = 'place';
     trimToCounts(this.draft);
-    this.titleText.setText('Step 2 of 2 · Place your formation');
-    this.selectedKey = null;
+    this.titleText.setText('Step 2 of 2 · Place your groups');
+    this.selected = null;
     this.selectedType = this.nextTypeToPlace(null);
 
     this.gridGfx = this.keep(this.add.graphics());
@@ -270,7 +286,13 @@ export class SetupScene extends Phaser.Scene {
     // --- Palette ---
     const px = PANEL_X;
     let y = HEADER_H + 10;
-    this.keep(this.add.text(px, y, 'Pick a unit, then tap or drag on the blue zone:', { fontFamily: FONT, fontSize: '17px', color: '#cbd5e1' }));
+    this.keep(
+      this.add.text(px, y, `Pick a unit, then tap the blue zone to place a group of ${GROUP_SIZE}:`, {
+        fontFamily: FONT,
+        fontSize: '17px',
+        color: '#cbd5e1',
+      }),
+    );
     y += 30;
     const pw = 212;
     const ph = 58;
@@ -279,7 +301,7 @@ export class SetupScene extends Phaser.Scene {
       const byy = y + Math.floor(i / 4) * (ph + 10);
       const b = makeButton(this, bx, byy, pw, ph, '', () => {
         this.selectedType = type;
-        this.selectedKey = null;
+        this.selected = null;
         this.refresh();
       }, { fontSize: 16, textLeft: 40 });
       this.keep(b.container);
@@ -287,39 +309,39 @@ export class SetupScene extends Phaser.Scene {
       b.container.add(icon);
       this.refreshers.push(() => {
         const left = remainingToPlace(this.draft, type);
-        b.setLabel(`${UNITS[type].name} · ${left} left`);
-        b.setSelected(this.selectedType === type);
+        b.setLabel(type === 'king' ? `King\n${left} left` : `${UNITS[type].name} ×${GROUP_SIZE}\n${left} left`);
+        b.setSelected(this.selectedType === type && !this.selected);
         b.setEnabled(left > 0 || this.selectedType === type);
       });
     });
     y += 2 * (ph + 10) + 10;
 
-    // --- Selected unit: stance / remove ---
+    // --- Selected group: stance / remove ---
     const sg = this.keep(this.add.graphics());
     sg.fillStyle(0x1e293b, 1).fillRect(px, y, GAME_W - px - 24, 200);
     const selTitle = this.keep(this.add.text(px + 14, y + 12, '', { fontFamily: FONT, fontSize: '19px', color: '#f8fafc', fontStyle: 'bold' }));
     const selHelp = this.keep(
       this.add.text(px + 14, y + 44, '', { fontFamily: FONT, fontSize: '16px', color: '#cbd5e1', wordWrap: { width: GAME_W - px - 60 } }),
     );
-    // With a unit selected these set its stance; with nothing selected they set ALL units.
+    // With a group selected these set its stance; with nothing selected they set ALL groups.
     const stanceButtons = STANCES.map((st, i) =>
       this.button(px + 14 + i * 186, y + 120, 176, 62, STANCE_INFO[st].name, () =>
-        this.selectedKey ? this.setStance(st) : this.setAllStances(st),
+        this.selected ? this.setStance(st) : this.setAllStances(st),
       ),
     );
     const removeBtn = this.button(px + 14 + 2 * 186, y + 120, 176, 62, 'Remove', () => this.removeSelected());
     this.refreshers.push(() => {
-      const sel = this.selectedKey ? this.draft.placed.get(this.selectedKey) : undefined;
+      const sel = this.selected;
       const noStance = sel?.type === 'king' || sel?.type === 'medic';
       if (!sel) {
-        selTitle.setText('Stance for ALL units (or tap a unit to change just that one)');
+        selTitle.setText('Stance for ALL groups (or tap a group to change just that one)');
         selHelp.setText(
-          'Tap a placed unit to select it, then tap an empty square to move it there (or another unit to swap). ' +
-            'Tap it again to deselect.',
+          'Tap a placed group to select it, then tap an empty spot to move it there (or another group to swap). ' +
+            'Tap it again to deselect. You can also drag a group.',
         );
       } else {
-        const [tx, ty] = parseKey(this.selectedKey!);
-        selTitle.setText(`${UNITS[sel.type].name} (column ${tx + 1}, row ${ty + 1}): tap a square to move it`);
+        const what = sel.type === 'king' ? 'King' : `${UNITS[sel.type].name} group`;
+        selTitle.setText(`${what} (column ${sel.tx + 1}): tap a spot to move it`);
         selHelp.setText(
           sel.type === 'king'
             ? 'The King follows a few tiles behind your army and fights enemies that come close.'
@@ -344,14 +366,15 @@ export class SetupScene extends Phaser.Scene {
     const gap = 12;
     this.button(px, y, aw, 58, '◀ Counts', () => this.showCounts());
     this.button(px + (aw + gap), y, aw, 58, 'Clear', () => {
-      this.draft.placed.clear();
-      this.selectedKey = null;
+      this.draft.groups = [];
+      this.selected = null;
       this.selectedType = this.nextTypeToPlace(null);
       this.refresh();
     });
     this.button(px + 2 * (aw + gap), y, aw, 58, 'Auto-place', () => {
-      autoPlace(this.draft, MAP.height);
-      this.selectedType = null;
+      if (!autoPlace(this.draft, MAP.height, this.defaultStance)) this.toast('Not enough room for every group. Move some groups.');
+      this.selected = null;
+      this.selectedType = this.nextTypeToPlace(null);
       this.refresh();
     });
     this.button(px + 3 * (aw + gap), y, aw, 58, 'Save', () =>
@@ -359,14 +382,14 @@ export class SetupScene extends Phaser.Scene {
     );
     y += 58 + gap;
     this.button(px, y, aw, 58, 'Load', () => {
-      const loaded = loadPreset();
+      const loaded = loadPreset(MAP.height);
       if (!loaded) {
         this.toast('No saved formation yet.');
         return;
       }
       this.draft = loaded;
-      this.selectedKey = null;
-      if (totalCount(this.draft.counts) !== ARMY_RULES.size) {
+      this.selected = null;
+      if (!countsComplete(this.draft.counts)) {
         this.showCounts();
         return;
       }
@@ -376,8 +399,9 @@ export class SetupScene extends Phaser.Scene {
     });
     const ready = this.button(px + (aw + gap), y, 3 * aw + 2 * gap, 58, 'Ready: start battle  ▶', () => this.startBattle(), 22);
     this.refreshers.push(() => {
-      const n = this.draft.placed.size;
-      status.setText(`Placed ${n} / ${ARMY_RULES.size}`);
+      const soldiers = this.draft.groups.filter((g) => g.type !== 'king').length;
+      const king = this.draft.groups.some((g) => g.type === 'king');
+      status.setText(`Groups placed ${soldiers} / ${ARMY_RULES.groups} · King ${king ? '✓' : '✗'}`);
       status.setColor(allPlaced(this.draft) ? '#86efac' : '#f8fafc');
       ready.setEnabled(allPlaced(this.draft));
     });
@@ -418,17 +442,24 @@ export class SetupScene extends Phaser.Scene {
     g.fillStyle(0xffffff, 0.35).fillTriangle(ax - 14, ay - 24, ax - 14, ay + 24, ax + 18, ay);
 
     this.unitLayer.removeAll(true);
-    for (const [key, u] of this.draft.placed) {
-      const [tx, ty] = parseKey(key);
-      const cx = GRID_X + tx * CELL + CELL / 2;
-      const cy = GRID_Y + ty * CELL + CELL / 2;
-      if (key === this.selectedKey) g.lineStyle(3, 0xfacc15, 1).strokeRect(cx - CELL / 2 + 1, cy - CELL / 2 + 1, CELL - 2, CELL - 2);
-      this.unitLayer.add(this.add.image(cx, cy, unitTextureKey(u.type, 0)).setScale(0.85));
-      const badge = STANCE_INFO[u.stance].badge;
-      if (badge && u.type !== 'king' && u.type !== 'medic') {
+    for (const grp of this.draft.groups) {
+      const x0 = GRID_X + grp.tx * CELL;
+      const y0 = GRID_Y + grp.ty * CELL;
+      const h = groupSize(grp.type) * CELL;
+      // A frame around each group so it reads as one block.
+      const isSel = grp === this.selected;
+      g.fillStyle(0x0f172a, 0.25).fillRect(x0 + 2, y0 + 2, CELL - 4, h - 4);
+      g.lineStyle(isSel ? 3 : 1, isSel ? 0xfacc15 : 0xdbeafe, isSel ? 1 : 0.5).strokeRect(x0 + 1, y0 + 1, CELL - 2, h - 2);
+      for (const [tx, ty] of groupTiles(grp)) {
+        const cx = GRID_X + tx * CELL + CELL / 2;
+        const cy = GRID_Y + ty * CELL + CELL / 2;
+        this.unitLayer.add(this.add.image(cx, cy, unitTextureKey(grp.type, 0)).setScale(0.8));
+      }
+      const badge = STANCE_INFO[grp.stance].badge;
+      if (badge && grp.type !== 'king' && grp.type !== 'medic') {
         this.unitLayer.add(
           this.add
-            .text(cx + CELL / 2 - 2, cy - CELL / 2 + 1, badge, {
+            .text(x0 + CELL - 2, y0 + 2, badge, {
               fontFamily: FONT,
               fontSize: '12px',
               color: '#0f172a',
@@ -450,113 +481,141 @@ export class SetupScene extends Phaser.Scene {
     return [tx, ty];
   }
 
+  /** Move a group so it is centred on (tx, row), if there is room. */
+  private tryMove(grp: PlacedGroup, tx: number, row: number): boolean {
+    const ty = topRowFor(grp.type, row, MAP.height);
+    if (grp.tx === tx && grp.ty === ty) return false;
+    if (!fits(this.draft, grp.type, tx, ty, MAP.height, this.draft.groups.indexOf(grp))) return false;
+    grp.tx = tx;
+    grp.ty = ty;
+    return true;
+  }
+
   private onPointerDown(p: Phaser.Input.Pointer): void {
     if (this.step !== 'place' || this.finished) return;
     const t = this.tileAt(p);
     if (!t) return;
-    const key = tileKey(t[0], t[1]);
-    if (this.draft.placed.has(key)) {
-      this.dragKey = key;
+    const at = groupAt(this.draft, t[0], t[1]);
+    if (at >= 0) {
+      this.pressed = this.draft.groups[at];
       this.dragMoved = false;
-    } else if (this.selectedKey) {
-      // A unit is selected: tapping an empty square moves it there.
-      const u = this.draft.placed.get(this.selectedKey)!;
-      this.draft.placed.delete(this.selectedKey);
-      this.draft.placed.set(key, u);
-      this.selectedKey = null;
+    } else if (this.selected) {
+      // A group is selected: tapping an empty spot moves it there.
+      if (this.tryMove(this.selected, t[0], t[1])) this.selected = null;
+      else this.toast('Not enough room there for the whole group.');
       this.refresh();
     } else {
-      this.painting = true;
-      this.tryPlace(key);
+      this.tryPlace(t[0], t[1]);
     }
   }
 
   private onPointerMove(p: Phaser.Input.Pointer): void {
-    if (this.step !== 'place' || !p.isDown) return;
+    if (this.step !== 'place' || !p.isDown || !this.pressed) return;
     const t = this.tileAt(p);
     if (!t) return;
-    const key = tileKey(t[0], t[1]);
-    if (this.dragKey && key !== this.dragKey && !this.draft.placed.has(key)) {
-      // Move the dragged unit.
-      const u = this.draft.placed.get(this.dragKey)!;
-      this.draft.placed.delete(this.dragKey);
-      this.draft.placed.set(key, u);
-      this.dragKey = key;
+    // Dragging a group: it follows the finger wherever it fits.
+    if (this.tryMove(this.pressed, t[0], t[1])) {
       this.dragMoved = true;
-      this.selectedKey = key;
+      this.selected = this.pressed;
       this.refresh();
-    } else if (this.painting && !this.draft.placed.has(key)) {
-      this.tryPlace(key);
     }
   }
 
   private onPointerUp(): void {
-    if (this.dragKey && !this.dragMoved) {
-      if (this.selectedKey && this.selectedKey !== this.dragKey) {
-        // Another unit was selected: swap the two.
-        const a = this.draft.placed.get(this.selectedKey)!;
-        const b = this.draft.placed.get(this.dragKey)!;
-        this.draft.placed.set(this.selectedKey, b);
-        this.draft.placed.set(this.dragKey, a);
-        this.selectedKey = null;
-      } else {
-        // A tap on a placed unit selects it (tap again to deselect).
-        this.selectedKey = this.selectedKey === this.dragKey ? null : this.dragKey;
-      }
-      this.refresh();
+    const grp = this.pressed;
+    this.pressed = null;
+    if (!grp || this.dragMoved) return;
+    if (this.selected && this.selected !== grp) {
+      this.swap(this.selected, grp);
+      this.selected = null;
+    } else {
+      // A tap on a group selects it (tap again to deselect).
+      this.selected = this.selected === grp ? null : grp;
     }
-    this.dragKey = null;
-    this.painting = false;
+    this.refresh();
   }
 
-  private tryPlace(key: string): void {
+  /** Swap the positions of two groups (if both still fit). */
+  private swap(a: PlacedGroup, b: PlacedGroup): void {
+    const posA = { tx: a.tx, ty: a.ty };
+    const posB = { tx: b.tx, ty: b.ty };
+    // Place each at the other's centre row (handles the 1-tile King too).
+    const centre = (g: { ty: number }, type: PlacedGroup['type']) => g.ty + Math.floor(groupSize(type) / 2);
+    const rowForA = centre(posB, b.type);
+    const rowForB = centre(posA, a.type);
+    a.tx = -99; // temporarily out of the way
+    b.tx = -99;
+    const aTy = topRowFor(a.type, rowForA, MAP.height);
+    const bTy = topRowFor(b.type, rowForB, MAP.height);
+    const aOk = fits(this.draft, a.type, posB.tx, aTy, MAP.height);
+    if (aOk) {
+      a.tx = posB.tx;
+      a.ty = aTy;
+    }
+    const bOk = aOk && fits(this.draft, b.type, posA.tx, bTy, MAP.height);
+    if (aOk && bOk) {
+      b.tx = posA.tx;
+      b.ty = bTy;
+      return;
+    }
+    // Didn't fit: put both back.
+    Object.assign(a, posA);
+    Object.assign(b, posB);
+    this.toast("Those two can't swap: not enough room.");
+  }
+
+  private tryPlace(tx: number, row: number): void {
     const type = this.selectedType;
     if (!type) {
-      this.toast(allPlaced(this.draft) ? 'All 25 units are placed. Press Ready!' : 'Pick a unit type first.');
+      this.toast(allPlaced(this.draft) ? 'Everything is placed. Press Ready!' : 'Pick a unit type first.');
       return;
     }
     if (remainingToPlace(this.draft, type) <= 0) {
-      this.toast(`No ${UNITS[type].name}s left to place.`);
+      this.toast(`No ${UNITS[type].name} groups left to place.`);
       return;
     }
-    this.draft.placed.set(key, { type, stance: this.defaultStance });
-    this.selectedKey = null;
+    const ty = topRowFor(type, row, MAP.height);
+    if (!fits(this.draft, type, tx, ty, MAP.height)) {
+      this.toast(`Not enough room there: a group needs ${groupSize(type)} free squares in a column.`);
+      return;
+    }
+    this.draft.groups.push({ type, stance: this.defaultStance, tx, ty });
+    this.selected = null;
     if (remainingToPlace(this.draft, type) <= 0) this.selectedType = this.nextTypeToPlace(type);
     this.refresh();
   }
 
-  /** Units that can have a stance (not the King or Medics). */
-  private stanceUnits() {
-    return [...this.draft.placed.values()].filter((u) => u.type !== 'king' && u.type !== 'medic');
+  /** Groups that can have a stance (not the King or Medics). */
+  private stanceGroups(): PlacedGroup[] {
+    return this.draft.groups.filter((g) => g.type !== 'king' && g.type !== 'medic');
   }
 
-  /** The stance shared by all units, or null if they differ. */
+  /** The stance shared by all groups, or null if they differ. */
   private commonStance(): Stance | null {
-    const units = this.stanceUnits();
-    if (!units.length) return this.defaultStance;
-    return units.every((u) => u.stance === units[0].stance) ? units[0].stance : null;
+    const groups = this.stanceGroups();
+    if (!groups.length) return this.defaultStance;
+    return groups.every((g) => g.stance === groups[0].stance) ? groups[0].stance : null;
   }
 
   private setAllStances(stance: Stance): void {
-    for (const u of this.stanceUnits()) u.stance = stance;
-    this.defaultStance = stance; // units placed later get it too
-    this.toast(`All units: ${STANCE_INFO[stance].name}`);
+    for (const g of this.stanceGroups()) g.stance = stance;
+    this.defaultStance = stance; // groups placed later get it too
+    this.toast(`All groups: ${STANCE_INFO[stance].name}`);
     this.refresh();
   }
 
   private setStance(stance: Stance): void {
-    const u = this.selectedKey ? this.draft.placed.get(this.selectedKey) : undefined;
-    if (!u) return;
-    u.stance = stance;
+    if (!this.selected) return;
+    this.selected.stance = stance;
     this.refresh();
   }
 
   private removeSelected(): void {
-    if (!this.selectedKey) return;
-    const u = this.draft.placed.get(this.selectedKey);
-    this.draft.placed.delete(this.selectedKey);
-    this.selectedKey = null;
-    if (u) this.selectedType = u.type;
+    const grp = this.selected;
+    if (!grp) return;
+    this.draft.groups.splice(this.draft.groups.indexOf(grp), 1);
+    this.selected = null;
+    this.selectedType = grp.type;
     this.refresh();
   }
 

@@ -1,6 +1,11 @@
 import { ARMY_RULES, UNIT_TYPES, UNITS } from '../config/gameConfig';
 import type { ArmySetup, MapDef, Team, UnitPlacement } from './types';
 
+/** Total units in an army: all groups of soldiers plus the King. */
+export function armySize(): number {
+  return ARMY_RULES.groups * ARMY_RULES.groupSize + 1;
+}
+
 /** Tile columns [min, max] (inclusive) a team may deploy in. */
 export function deployColumns(team: Team, map: MapDef): [number, number] {
   const n = ARMY_RULES.deployColumns;
@@ -11,16 +16,20 @@ export function deployColumns(team: Team, map: MapDef): [number, number] {
 export function validateArmy(setup: ArmySetup, team: Team, map: MapDef): string[] {
   const errors: string[] = [];
   const units = setup.units;
-  if (units.length !== ARMY_RULES.size) {
-    errors.push(`Army must have exactly ${ARMY_RULES.size} units (has ${units.length}).`);
+  const size = armySize();
+  if (units.length !== size) {
+    errors.push(`Army must have exactly ${size} units (has ${units.length}).`);
   }
   for (const type of UNIT_TYPES) {
     const count = units.filter((u) => u.type === type).length;
-    const max = ARMY_RULES.maxPerType[type];
+    if (type === 'king') {
+      if (count !== 1) errors.push(`Army needs exactly 1 King (has ${count}).`);
+      continue;
+    }
+    const max = ARMY_RULES.maxGroups[type] * ARMY_RULES.groupSize;
     if (count > max) errors.push(`Too many ${UNITS[type].name}s: ${count} (max ${max}).`);
-    const required = ARMY_RULES.required[type];
-    if (required !== undefined && count !== required) {
-      errors.push(`Army needs exactly ${required} ${UNITS[type].name} (has ${count}).`);
+    if (count % ARMY_RULES.groupSize !== 0) {
+      errors.push(`${UNITS[type].name}s must come in groups of ${ARMY_RULES.groupSize} (has ${count}).`);
     }
   }
   const [minX, maxX] = deployColumns(team, map);
