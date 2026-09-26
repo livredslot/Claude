@@ -37,13 +37,15 @@ to GitHub Pages: https://livredslot.github.io/Claude/ (workflow `.github/workflo
 - `src/sim/` = **pure deterministic simulation**. No Phaser, no DOM, no timers, no
   `Math.random()`. Integer maths only (positions in sub-tiles: 1 tile = 1000; HP in
   centi-HP: 1 HP = 100), exact `isqrt`, seeded mulberry32 RNG, stable iteration order.
-  20 ticks/s. `battle.stateHash()` fingerprints the state (used by tests, later P2P desync
-  checks). Must stay runnable headless and fast (≈0.1 s per 102-unit battle).
+  20 ticks/s. `battle.stateHash()` fingerprints the state (used by tests and online desync
+  checks). Must stay runnable headless and fast (≈0.03–0.1 s per battle; Hard AI runs ~45).
+  Online play depends on this determinism: any change here must keep both devices identical.
 - Fairness: unit IDs interleave teams; which team moves first each tick comes from the RNG;
   damage/heals are collected and applied at the end of the tick. Mirrored armies must win
   ~50/50 — check this after any movement/targeting change.
 - Player **orders** during battle (`issueCommand`) are recorded with their tick in
-  `commandLog`, so replays (and later P2P) re-issue them exactly (`applyRecordedCommands`).
+  `commandLog`, so replays re-issue them exactly (`applyRecordedCommands`); online, both
+  players' orders reach the battle through the lockstep on the same tick.
 - `src/config/gameConfig.ts` → compiled to integers in `src/sim/compiledConfig.ts`.
 - `src/game/armyDraft.ts` = army being built on the setup screen (groups, auto-place,
   presets); `src/scenes/` = Phaser scenes (Menu, Setup, Battle); `src/ui/` = shared UI.
@@ -53,7 +55,21 @@ to GitHub Pages: https://livredslot.github.io/Claude/ (workflow `.github/workflo
   otherwise it follows a per-goal-tile cost map (Dijkstra, cached per map forever since
   terrain is static) with a few tiles of straight-line look-ahead. Open Plains never
   path-finds, so its battles are bit-identical to before terrain existed.
-- Scenes: Menu → MapSelect → Setup → Battle (the map id travels in the scene data).
+- Scenes: Menu → MapSelect → Setup → Battle (vs AI); Menu → Online → (host: MapSelect →
+  Online) → Setup → Battle (online). Map id, difficulty, online flag and `myTeam` travel in
+  the scene data. A `?room=CODE` link opens straight into joining that room.
+- `src/ai/` = computer opponent. `armyBuilder.ts`: Easy = random, Medium = one of
+  `ARMY_STYLES`, Hard = `HardArmyPlanner` tests candidates in headless battles (cut off at
+  30 s) vs the styles, time-sliced a few ms per frame while the player builds (~1 s CPU on
+  a PC). `commander.ts`: battle orders, issued via `issueCommand` so replays work. Tested:
+  "Attack King when ahead" made the AI LOSE more — don't bring it back without measuring.
+- `src/net/` = online play. `session.ts` (PeerJS: public server only for finding each
+  other by room code, then direct WebRTC; host = Blue, guest = Red; one message handler
+  at a time, messages queue while scenes switch; bump `NET_VERSION` when messages or the
+  sim change). `lockstep.ts` (orders scheduled 4 ticks ahead; a device only steps tick T
+  once it has the other's frame for T). `commit.ts` (commit–reveal of setups, own SHA-256
+  because `crypto.subtle` doesn't exist on plain-http LAN testing). State hashes are
+  exchanged every 40 ticks to detect desyncs.
 
 ## Current game rules (as decided with the owner)
 
@@ -64,7 +80,7 @@ to GitHub Pages: https://livredslot.github.io/Claude/ (workflow `.github/workflo
   **vertical line of 3** in the 6-column deployment zone (tap to place; tap a group then a
   spot to move; tap another group to swap; drag works too). Stances: **Advance** or
   **Flank** (per group or all groups). Auto-place, Clear, Save/Load (browser storage).
-  **PvP: 60 s** to build the army (auto-completed when time runs out); **vs AI: no limit**.
+  **Online: 60 s** to build the army (auto-completed when time runs out); **vs AI: no limit**.
 - **Battle:** max **60 seconds**. If a **King dies, its side loses immediately**. If both
   Kings are alive at 60 s: the King with more HP (% of max) wins; equal HP = draw.
 - **Targeting:** every unit simply attacks the **nearest enemy** (no automatic priorities —
@@ -88,24 +104,28 @@ to GitHub Pages: https://livredslot.github.io/Claude/ (workflow `.github/workflo
   (arrows/spells fly over; no line-of-sight rules). **Shallow water:** 50% speed, −25% damage.
 - **Maps:** Open Plains, River Crossing, Twin Peaks, Mountain Pass, Lake Valley, chosen on
   their own screen after the menu (plus "Random"); demo battle = random map.
-- The opponent is still the fixed practice army `TEST_ARMY_RED` until the AI (Phase 5).
+- **vs AI** (owner chose Easy / Medium / Hard, AI never sees the player's army): Easy =
+  random army, no orders. Medium = a sensible army style, Attack King only to finish off.
+  Hard = best-tested army, opens with Keep Formation (8 s), defends its King, attacks late
+  if behind on King HP. Difficulty picked on the map select screen.
+- **Online PvP** (owner chose online with room codes): host creates room + picks map, gets a
+  4-character code and a link; guest joins; 60 s setup with commit–reveal; battle in
+  lockstep (no speed button); "Play again" when both press it; "Leave" anywhere.
 
 ## Phase plan and status
 
 1. ✅ Project setup + simulation core
 2. ✅ Deployment (plus King, groups of 5, battle orders, 60 s rules — all added by the owner)
-3. 🧪 Terrain and maps — built, **waiting for the owner to test and say "continue"**
-4. ⏳ NEXT: Formation mechanics — facing, flanking bonus (+30% side / +60% behind), line bonus,
-   Horseman charge; `npm run balance` script
-4b. **Team battles (3v3 / 4v4)** — owner wants this; recommended right after Phase 4 so the
-   AI and P2P are built for teams. Open questions to ask then: lose when ALL Kings or ANY
-   King dies? army size per player (performance/map size)? deployment per player? who
-   commands orders?
-5. AI Easy & Medium + main menu/results polish (AI should also use battle orders)
+3. ✅ Terrain and maps (committed and deployed; armies changed to 12 groups of 3)
+4. ⏸ SKIPPED for now by the owner: Formation mechanics — facing, flanking bonus
+   (+30% side / +60% behind), line bonus, Horseman charge; `npm run balance` script
+4b. **Team battles (3v3 / 4v4)** — owner wants this. Open questions to ask then: lose when
+   ALL Kings or ANY King dies? army size per player (performance/map size)? deployment per
+   player? who commands orders?
+5. 🧪 AI Easy / Medium / Hard (was 5 + 7) and 8. online PvP — built together at the owner's
+   request, **waiting for the owner to test**. Not done yet from the old plan: Hard learning
+   from the player's last 5 battles; running Hard in a Web Worker (it's time-sliced instead).
 6. Elements (Fire > Air > Earth > Water > Fire) with passives and Mage specials
-7. AI Hard (headless search in a Web Worker + learning from last 5 battles)
-8. P2P (PeerJS rooms, commit–reveal of setups, desync check; battle orders must be sent and
-   applied on the same tick on both devices)
 9. Polish & mobile (replays, sound hooks, PWA, zoomed placement view for phones)
 10. Native apps with Capacitor
 

@@ -1,11 +1,20 @@
 /**
  * Battle screen: draws the simulation and shows the HUD.
  * All game logic lives in src/sim; this scene only reads the battle state.
+ *
+ * vs AI: the computer's orders come from AiCommander (recorded like the player's).
+ * Online: both devices run the same battle in lockstep (src/net/lockstep.ts); only the
+ * players' orders travel over the network, plus a state fingerprint now and then to
+ * detect if the two battles ever differ.
  */
 import Phaser from 'phaser';
 import { ARMY_RULES, TERRAIN, UNIT_TYPES, UNITS } from '../config/gameConfig';
+import { DIFFICULTY_NAMES, type Difficulty } from '../ai/armyBuilder';
+import { AiCommander } from '../ai/commander';
 import { MAPS, getMap } from '../data/maps';
 import { TEST_ARMY_BLUE, TEST_ARMY_RED } from '../data/testArmies';
+import { Lockstep } from '../net/lockstep';
+import { getSession, type NetMessage, type OnlineSession } from '../net/session';
 import {
   Battle,
   SIM_CONSTANTS,
@@ -13,11 +22,14 @@ import {
   applyRecordedCommands,
   type ArmySetup,
   type AttackMode,
+  type BattleCommand,
   type BattleEvent,
   type BattleRecord,
   type RecordedCommand,
+  type Team,
   type Unit,
 } from '../sim';
+import type { SetupStartData } from './SetupScene';
 import { makeButton, type Button } from '../ui/button';
 import { drawMapTiles, terrainAt } from '../ui/terrainDraw';
 import { drawUnitShape, ensureUnitTextures, unitTextureKey } from '../ui/unitShapes';
@@ -36,6 +48,11 @@ import {
 } from '../ui/layout';
 
 const TICK_MS = 1000 / 20;
+/** Online: compare battle fingerprints with the friend every this many ticks. */
+const HASH_EVERY_TICKS = 40;
+
+/** Online "Play again" presses, by round (kept across the replay screen restarting). */
+const again = { mine: -1, theirs: -1 };
 
 interface Effect {
   kind: BattleEvent['kind'];
@@ -64,8 +81,14 @@ export interface BattleStartData {
   seed?: number;
   /** When set, this is a replay: these recorded orders are re-issued and the player can't give new ones. */
   replayCommands?: RecordedCommand[];
-  /** Where "Change army" goes back to (the setup screen), with its settings. */
-  setupData?: object;
+  /** Where "Change army" / "Play again" go back to (the setup screen), with its settings. */
+  setupData?: SetupStartData;
+  /** vs AI: the computer plays the other side with this difficulty. */
+  ai?: Difficulty;
+  /** Online game (uses the online session). */
+  online?: boolean;
+  /** Which side the player on this device controls (default Blue). */
+  myTeam?: Team;
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -93,6 +116,20 @@ export class BattleScene extends Phaser.Scene {
   private modeButtons!: Record<AttackMode, Button>;
   private orderText!: Phaser.GameObjects.Text;
 
+  private myTeam: Team = 0;
+  private commander: AiCommander | null = null;
+  private session: OnlineSession | null = null;
+  private lockstep: Lockstep | null = null;
+  /** Online: our fingerprints and the friend's, by tick. */
+  private myHashes = new Map<number, number>();
+  private theirHashes = new Map<number, number>();
+  private desync = false;
+  private friendLeft = '';
+  private stalledMs = 0;
+  private netText!: Phaser.GameObjects.Text;
+  private resultNote: Phaser.GameObjects.Text | null = null;
+  private againButton: Button | null = null;
+
   constructor() {
     super('Battle');
   }
@@ -111,11 +148,40 @@ export class BattleScene extends Phaser.Scene {
     this.accumulator = 0;
     this.effects = [];
     this.resultShown = false;
+    this.myTeam = data?.myTeam ?? 0;
+    this.commander = null;
+    this.session = null;
+    this.lockstep = null;
+    this.myHashes = new Map();
+    this.theirHashes = new Map();
+    this.desync = false;
+    this.friendLeft = '';
+    this.stalledMs = 0;
+    this.resultNote = null;
+    this.againButton = null;
+    if (data?.online) this.speed = 1; // both players must watch at the same speed
+  }
+
+  private get enemyTeam(): Team {
+    return this.myTeam === 0 ? 1 : 0;
   }
 
   create(): void {
     this.battle = new Battle(getMap(this.record.mapId), this.record.setups, this.record.seed);
     this.savePrevPositions();
+
+    if (this.startData.ai && !this.isReplay) this.commander = new AiCommander(this.startData.ai, this.enemyTeam);
+    if (this.startData.online) {
+      const s = getSession();
+      if (s && !s.closed) {
+        this.session = s;
+        if (!this.isReplay) this.lockstep = new Lockstep(this.myTeam, (frame) => s.send({ t: 'frame', frame }));
+        s.setHandler((m) => this.onNet(m));
+        this.events.once('shutdown', () => s.setHandler(null));
+      } else {
+        this.friendLeft = 'The connection to your friend was lost.';
+      }
+    }
 
     this.drawMap();
     this.drawLegend();
@@ -200,17 +266,24 @@ export class BattleScene extends Phaser.Scene {
 
   private setMode(mode: AttackMode): void {
     if (this.isReplay) return;
-    this.battle.issueCommand(0, { kind: 'mode', mode });
+    this.giveOrder({ kind: 'mode', mode });
+  }
+
+  /** Online the order goes through the lockstep (it takes effect a few ticks later on both devices). */
+  private giveOrder(cmd: BattleCommand): void {
+    if (this.battle.result) return;
+    if (this.lockstep) this.lockstep.queue(cmd);
+    else if (!this.startData.online) this.battle.issueCommand(this.myTeam, cmd);
     this.refreshOrders();
   }
 
-  /** Tap on the battlefield: pick the Red unit under the finger as the focus target. */
+  /** Tap on the battlefield: pick the enemy unit under the finger as the focus target. */
   private onMapTap(p: Phaser.Input.Pointer): void {
     if (this.isReplay || this.battle.result || p.y < MAP_Y || p.y > MAP_Y + MAP_H_PX) return;
     let best: Unit | null = null;
     let bestD = (TILE_PX * 1.1) ** 2; // generous finger-sized tap area
     for (const u of this.battle.units) {
-      if (!u.alive || u.team !== 1) continue;
+      if (!u.alive || u.team !== this.enemyTeam) continue;
       const d = (sx(u.x) - p.x) ** 2 + (sy(u.y) - p.y) ** 2;
       if (d < bestD) {
         best = u;
@@ -218,23 +291,23 @@ export class BattleScene extends Phaser.Scene {
       }
     }
     if (!best) return;
-    const target = this.battle.focus[0] === best.id ? -1 : best.id; // tap again to cancel
-    this.battle.issueCommand(0, { kind: 'focus', target });
-    this.refreshOrders();
+    const target = this.battle.focus[this.myTeam] === best.id ? -1 : best.id; // tap again to cancel
+    this.giveOrder({ kind: 'focus', target });
   }
 
   private refreshOrders(): void {
-    const mode = this.battle.modes[0];
+    const mode = this.battle.modes[this.myTeam];
     for (const [m, b] of Object.entries(this.modeButtons)) b.setSelected(m === mode);
-    const f = this.battle.focus[0];
+    const f = this.battle.focus[this.myTeam];
+    const enemy = TEAM_NAMES[this.enemyTeam];
     if (this.isReplay) {
-      this.orderText.setText('Replay: your orders are repeated exactly as you gave them.');
+      this.orderText.setText('Replay: all orders are repeated exactly as they were given.');
     } else if (f >= 0) {
-      this.orderText.setText(`Focus: Red ${UNITS[this.battle.units[f].type].name}. Tap it again to cancel.`);
+      this.orderText.setText(`Focus: ${enemy} ${UNITS[this.battle.units[f].type].name}. Tap it again to cancel.`);
     } else {
       this.orderText.setText(
         mode === 'king'
-          ? 'Everyone is going for the Red King! Tap an enemy to focus it instead.'
+          ? `Everyone is going for the ${enemy} King! Tap an enemy to focus it instead.`
           : mode === 'formation'
             ? 'Marching in formation. Units break off when they find a target.'
             : 'Tap an enemy to make your whole army attack it.',
@@ -262,13 +335,36 @@ export class BattleScene extends Phaser.Scene {
       .text(GAME_W / 2, 84, 'Army strength  ·  King HP decides if time runs out', { fontFamily: FONT, fontSize: '13px', color: '#94a3b8' })
       .setOrigin(0.5, 0.5);
 
-    makeButton(this, 16, 22, 150, 56, 'Menu', () => this.scene.start('Menu'));
-    this.add.text(16, 90, `${this.battle.map.name} · Seed ${this.record.seed}`, { fontFamily: FONT, fontSize: '12px', color: '#64748b' }).setOrigin(0, 0.5);
+    makeButton(this, 16, 22, 150, 56, this.startData.online ? 'Leave' : 'Menu', () => this.scene.start('Menu'));
+    const who = this.startData.online
+      ? ` · Online · You are ${TEAM_NAMES[this.myTeam]}`
+      : this.startData.ai
+        ? ` · vs AI (${DIFFICULTY_NAMES[this.startData.ai]})`
+        : '';
+    this.add
+      .text(16, 90, `${this.battle.map.name}${who} · Seed ${this.record.seed}`, { fontFamily: FONT, fontSize: '12px', color: '#64748b' })
+      .setOrigin(0, 0.5);
 
     this.speedButton = makeButton(this, 1026, 22, 116, 56, `Speed ${this.speed}×`, () => {
       this.speed = this.speed === 1 ? 2 : 1;
       this.speedButton.setLabel(`Speed ${this.speed}×`);
     });
+    // Online both players must watch at the same pace (except when watching a replay).
+    if (this.startData.online && !this.isReplay) this.speedButton.container.setVisible(false);
+
+    // Online status ("waiting for your friend…", problems), shown over the battlefield.
+    this.netText = this.add
+      .text(GAME_W / 2, MAP_Y + 30, '', {
+        fontFamily: FONT,
+        fontSize: '20px',
+        color: '#fde047',
+        backgroundColor: '#000000cc',
+        padding: { x: 12, y: 6 },
+        align: 'center',
+      })
+      .setOrigin(0.5)
+      .setDepth(15)
+      .setVisible(false);
     makeButton(this, 1150, 22, 114, 56, 'Debug', () => {
       this.debug = !this.debug;
       this.debugText.setVisible(this.debug);
@@ -291,19 +387,33 @@ export class BattleScene extends Phaser.Scene {
   // ------------------------------------------------------------------
 
   update(_time: number, delta: number): void {
+    const online = !!this.lockstep;
     // Cap delta so a backgrounded tab doesn't fast-forward the whole battle at once.
-    this.accumulator += Math.min(delta, 250) * this.speed;
-    while (this.accumulator >= TICK_MS && !this.battle.result) {
+    // Online, allow a bigger backlog so a device that fell behind catches up.
+    this.accumulator = Math.min(this.accumulator + Math.min(delta, 250) * this.speed, online ? 1000 : 250);
+    let stalled = false;
+    while (this.accumulator >= TICK_MS && !this.battle.result && !this.friendLeft) {
       this.savePrevPositions();
       if (this.isReplay) this.nextReplayCommand = applyRecordedCommands(this.battle, this.record.commands, this.nextReplayCommand);
-      const focusBefore = this.battle.focus[0];
-      const modeBefore = this.battle.modes[0];
-      this.battle.step();
-      if (this.battle.focus[0] !== focusBefore || this.battle.modes[0] !== modeBefore) this.refreshOrders();
+      else this.commander?.update(this.battle);
+      const focusBefore = this.battle.focus[this.myTeam];
+      const modeBefore = this.battle.modes[this.myTeam];
+      if (this.lockstep) {
+        if (!this.lockstep.step(this.battle)) {
+          stalled = true; // the friend's orders for this tick haven't arrived yet
+          break;
+        }
+        this.afterOnlineStep();
+      } else {
+        this.battle.step();
+      }
+      if (this.battle.focus[this.myTeam] !== focusBefore || this.battle.modes[this.myTeam] !== modeBefore) this.refreshOrders();
       this.spawnEffects(this.battle.events);
       this.accumulator -= TICK_MS;
     }
-    const alpha = this.battle.result ? 1 : this.accumulator / TICK_MS;
+    this.stalledMs = stalled ? this.stalledMs + delta : 0;
+    this.updateNetText();
+    const alpha = this.battle.result || stalled ? 1 : this.accumulator / TICK_MS;
 
     this.updateEffects(delta * this.speed);
     this.drawUnits(alpha);
@@ -315,6 +425,102 @@ export class BattleScene extends Phaser.Scene {
       this.resultShown = true;
       this.time.delayedCall(800, () => this.showResult());
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Online
+  // ------------------------------------------------------------------
+
+  private onNet(m: NetMessage): void {
+    switch (m.t) {
+      case 'frame':
+        this.lockstep?.receive(m.frame);
+        break;
+      case 'hash': {
+        this.theirHashes.set(m.tick, m.hash);
+        const mine = this.myHashes.get(m.tick);
+        if (mine !== undefined && mine !== m.hash) this.desync = true;
+        break;
+      }
+      case 'again':
+        again.theirs = this.session?.round ?? -1;
+        this.refreshAgain();
+        break;
+      case 'start':
+        // The host started the next round: back to army setup, keeping our army.
+        this.goToNextRound();
+        break;
+      case '_closed':
+        this.friendLeft = m.reason;
+        this.refreshAgain();
+        break;
+    }
+  }
+
+  /** Every few ticks, fingerprint the battle and compare with the friend's. */
+  private afterOnlineStep(): void {
+    const t = this.battle.tick;
+    if (t % HASH_EVERY_TICKS !== 0 && !this.battle.result) return;
+    const h = this.battle.stateHash();
+    this.myHashes.set(t, h);
+    this.session?.send({ t: 'hash', tick: t, hash: h });
+    const theirs = this.theirHashes.get(t);
+    if (theirs !== undefined && theirs !== h) this.desync = true;
+  }
+
+  private updateNetText(): void {
+    let msg = '';
+    let color = '#fde047';
+    if (this.friendLeft && !this.battle.result) {
+      msg = `${this.friendLeft}\nThe battle can't continue. Press Leave to go back to the menu.`;
+      color = '#fca5a5';
+    } else if (this.desync) {
+      msg = 'Warning: your battle and your friend\'s battle no longer match!';
+      color = '#fca5a5';
+    } else if (this.stalledMs > 1500) {
+      msg = 'Waiting for your friend… (slow connection, or their game is in the background)';
+    }
+    this.netText.setText(msg).setColor(color).setVisible(msg !== '');
+  }
+
+  /** Online "Play again": when both players pressed it, the host starts the next round. */
+  private pressAgain(): void {
+    const s = this.session;
+    if (!s || s.closed) return;
+    again.mine = s.round;
+    s.send({ t: 'again' });
+    this.refreshAgain();
+  }
+
+  private refreshAgain(): void {
+    const s = this.session;
+    const round = s?.round ?? -2;
+    const mine = again.mine === round;
+    const theirs = again.theirs === round;
+    if (this.againButton) this.againButton.setEnabled(!!s && !s.closed && !this.friendLeft && !mine);
+    if (this.resultNote) {
+      this.resultNote.setText(
+        this.friendLeft
+          ? this.friendLeft
+          : mine && theirs
+            ? 'Starting the next battle…'
+            : mine
+              ? 'Waiting for your friend to press Play again…'
+              : theirs
+                ? 'Your friend wants to play again!'
+                : '',
+      );
+    }
+    if (s && !s.closed && mine && theirs && s.role === 'host') {
+      s.hostStartRound();
+      this.goToNextRound();
+    }
+  }
+
+  private goToNextRound(): void {
+    this.session?.setHandler(null); // messages wait for the setup screen
+    const data: SetupStartData = { mode: 'online', mapId: this.session?.mapId ?? this.record.mapId, draft: this.startData.setupData?.draft };
+    this.scene.start('Setup', data);
   }
 
   private savePrevPositions(): void {
@@ -384,11 +590,11 @@ export class BattleScene extends Phaser.Scene {
       bars.fillStyle(hpPct > 0.5 ? 0x22c55e : hpPct > 0.25 ? 0xeab308 : 0xef4444, 1).fillRect(x - bw / 2, y - 20, bw * hpPct, 4);
     }
 
-    // Marker on the enemy Blue's orders point at: focus target (yellow) or Red King in 'Attack King' mode (orange).
-    const f = this.battle.focus[0];
-    const redKing = this.battle.kingIds[1];
+    // Marker on the enemy our orders point at: focus target (yellow) or enemy King in 'Attack King' mode (orange).
+    const f = this.battle.focus[this.myTeam];
+    const enemyKing = this.battle.kingIds[this.enemyTeam];
     const markId =
-      f >= 0 ? f : this.battle.modes[0] === 'king' && redKing >= 0 && this.battle.units[redKing].alive ? redKing : -1;
+      f >= 0 ? f : this.battle.modes[this.myTeam] === 'king' && enemyKing >= 0 && this.battle.units[enemyKing].alive ? enemyKing : -1;
     if (markId >= 0) {
       const [x, y] = this.posOf(this.battle.units[markId], alpha);
       const pulse = 20 + Math.sin(this.time.now / 150) * 3;
@@ -504,8 +710,8 @@ export class BattleScene extends Phaser.Scene {
     const v0 = b.armyValue(0);
     const v1 = b.armyValue(1);
     const kingPct = (t: 0 | 1) => Math.ceil(b.kingHpPermille(t) / 10);
-    this.valueTexts[0].setText(`${TEAM_NAMES[0]} · ${b.aliveCount(0)} units\nKing ${kingPct(0)}%`);
-    this.valueTexts[1].setText(`${b.aliveCount(1)} units · ${TEAM_NAMES[1]}\nKing ${kingPct(1)}%`);
+    this.valueTexts[0].setText(`${this.sideName(0)} · ${b.aliveCount(0)} units\nKing ${kingPct(0)}%`);
+    this.valueTexts[1].setText(`${b.aliveCount(1)} units · ${this.sideName(1)}\nKing ${kingPct(1)}%`);
 
     const g = this.gHud;
     g.clear();
@@ -518,6 +724,14 @@ export class BattleScene extends Phaser.Scene {
     g.fillStyle(TEAM_COLORS[0], 1).fillRect(x, y, w * share, h);
     g.lineStyle(2, 0xffffff, 0.8).strokeRect(x, y, w, h);
     g.lineStyle(2, 0xffffff, 0.8).lineBetween(x + w / 2, y - 3, x + w / 2, y + h + 3);
+  }
+
+  /** "Blue (You)", "Red (AI Hard)", "Red (Friend)", or just the colour in a demo. */
+  private sideName(team: Team): string {
+    const { ai, online } = this.startData;
+    if (!ai && !online) return TEAM_NAMES[team];
+    if (team === this.myTeam) return `${TEAM_NAMES[team]} (You)`;
+    return `${TEAM_NAMES[team]} (${online ? 'Friend' : `AI ${DIFFICULTY_NAMES[ai!]}`})`;
   }
 
   private drawDebug(alpha: number): void {
@@ -550,6 +764,7 @@ export class BattleScene extends Phaser.Scene {
         `Hash ${this.battle.stateHash().toString(16).padStart(8, '0')}`,
         `Map: ${this.battle.map.name}`,
         `Tile under pointer: ${this.pointerTerrain()}`,
+        ...(this.lockstep ? [`Online: you are ${TEAM_NAMES[this.myTeam]}, order delay ${this.lockstep.delay} ticks${this.desync ? ', OUT OF SYNC' : ''}`] : []),
       ].join('\n'),
     );
   }
@@ -580,10 +795,15 @@ export class BattleScene extends Phaser.Scene {
     const box = this.add.rectangle(x0, y0, w, h, 0x0f172a, 0.97).setOrigin(0).setStrokeStyle(3, 0x94a3b8);
     panel.add([shade, box]);
 
+    // With a player (vs AI or online), say it from their point of view.
+    const personal = !!(this.startData.ai || this.startData.online);
     const title =
-      r.winner === null ? 'DRAW' : `${TEAM_NAMES[r.winner].toUpperCase()} WINS`;
-    const titleColor = r.winner === null ? '#f8fafc' : r.winner === 0 ? '#93c5fd' : '#fca5a5';
-    const secs = (r.tick / 20).toFixed(1);
+      r.winner === null
+        ? 'DRAW'
+        : personal
+          ? `${r.winner === this.myTeam ? 'YOU WIN!' : 'YOU LOSE'}  (${TEAM_NAMES[r.winner]} wins)`
+          : `${TEAM_NAMES[r.winner].toUpperCase()} WINS`;
+    const titleColor = r.winner === null ? '#f8fafc' : r.winner === 0 ? '#93c5fd' : '#fca5a5';    const secs = (r.tick / 20).toFixed(1);
     const loser = r.winner === null ? 'Both' : TEAM_NAMES[r.winner === 0 ? 1 : 0];
     const reason =
       r.reason === 'king'
@@ -632,13 +852,26 @@ export class BattleScene extends Phaser.Scene {
     const replay = makeButton(this, bx, by, bw, 60, 'Watch replay', () =>
       this.scene.restart({ ...this.startData, mapId, seed, setups, replayCommands: [...this.battle.commandLog] }),
     );
-    const again = makeButton(this, bx + bw + gap, by, bw, 60, 'Rematch', () =>
+    panel.add(replay.container);
+
+    if (this.startData.online) {
+      // Online: play again only when both players agree (the host then starts a new round).
+      this.againButton = makeButton(this, bx + bw + gap, by, bw, 60, 'Play again', () => this.pressAgain());
+      const leave = makeButton(this, bx + 2 * (bw + gap), by, bw, 60, 'Leave', () => this.scene.start('Menu'));
+      this.resultNote = this.add
+        .text(GAME_W / 2, by - 24, '', { fontFamily: FONT, fontSize: '17px', color: '#fde047', align: 'center' })
+        .setOrigin(0.5);
+      panel.add([this.againButton.container, leave.container, this.resultNote]);
+      this.refreshAgain();
+      return;
+    }
+
+    const rematch = makeButton(this, bx + bw + gap, by, bw, 60, 'Rematch', () =>
       this.scene.restart({ ...this.startData, mapId, seed: undefined, setups, replayCommands: undefined }),
     );
     const change = makeButton(this, bx + 2 * (bw + gap), by, bw, 60, setupData ? 'Change army' : 'Menu', () =>
       setupData ? this.scene.start('Setup', setupData) : this.scene.start('Menu'),
     );
-    panel.add(change.container);
-    panel.add([replay.container, again.container]);
+    panel.add([rematch.container, change.container]);
   }
 }

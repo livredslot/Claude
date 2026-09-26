@@ -3,7 +3,15 @@
 A 2D auto-battle strategy game. Two armies (12 groups of 3 soldiers + 1 King = 37 units each)
 are placed secretly, then fight automatically for up to 60 seconds. Built with **Phaser 3**, **Vite** and **TypeScript**.
 
-**Current status: Phase 3 — terrain and maps.**
+**Current status: terrain and maps, AI opponents (Easy / Medium / Hard) and online PvP.**
+
+- **Play vs AI:** pick a map and a difficulty. Easy builds a random army; Medium picks a sensible army
+  style; Hard tests many armies in quick simulated battles on the chosen map (while you build yours) and
+  keeps the strongest, and gives smarter battle orders. The AI never sees your army.
+- **Play online with a friend:** one player creates a room (and picks the map) and sends the 4-character
+  code or the link; the other joins. Both build their army in 60 seconds without seeing each other's,
+  then watch the same battle live and give orders. Uses [PeerJS](https://peerjs.com) (its free public
+  server only helps the two devices find each other; the game itself goes directly between them).
 
 - **Maps:** Open Plains, River Crossing, Twin Peaks, Mountain Pass and Lake Valley (all mirror-symmetrical),
   picked on the map select screen after the menu.
@@ -22,9 +30,9 @@ are placed secretly, then fight automatically for up to 60 seconds. Built with *
 - Units walk through their own army, so fast units aren't stuck behind slow ones.
 - **Army setup:** Step 1 picks 12 groups of 3 (+/−; max 1 group of Medics and of Mages); Step 2 places
   each group as a vertical line of 3 by tapping (tap a group, then a spot, to move it), with stances,
-  Auto-place, Save/Load. PvP gives you 60 seconds (missing groups are auto-filled when time runs out);
+  Auto-place, Save/Load. Online gives you 60 seconds (missing groups are auto-filled when time runs out);
   vs AI has no limit.
-- The opponent is a fixed practice army until the AI (Phase 5) and online PvP (Phase 8) are built.
+- "Watch a demo battle" shows two fixed practice armies on a random map.
 
 ## Getting started
 
@@ -65,8 +73,14 @@ src/
     army.ts              Army validation (12 groups of 3 + King, limits, deployment zone)
   data/                  Maps and the hard-coded Phase 1 test armies
   game/armyDraft.ts      Army being built on the setup screen: counts, auto-place, presets
+  ai/armyBuilder.ts      How the AI builds its army (Easy / Medium / Hard)
+  ai/commander.ts        The AI's battle orders
+  net/session.ts         Online connection (PeerJS room codes, messages)
+  net/lockstep.ts        Keeps both players' battles identical (orders applied on the same tick)
+  net/commit.ts          Commit–reveal: nobody sees the other army before locking in their own
   scenes/MenuScene.ts    Start menu
-  scenes/MapSelectScene.ts  Choose the battlefield
+  scenes/MapSelectScene.ts  Choose the battlefield (and the AI difficulty)
+  scenes/OnlineScene.ts  Create or join an online room
   scenes/SetupScene.ts   Army setup: counts, then placement (timer in PvP)
   scenes/BattleScene.ts  Phaser: draws the battle, HUD, effects, results
   ui/                    Layout constants and the touch-friendly button

@@ -3,12 +3,20 @@
  *   1. Counts: choose how many GROUPS of 3 of each unit (+/−), exactly 12 groups, plus 1 King.
  *   2. Place: tap to place each group (a vertical line of 3) in your deployment zone, set stances.
  *   (Group size and number of groups come from ARMY_RULES in the config.)
- * In PvP there is a time limit; when it runs out the army is auto-completed and locked in.
+ * Online there is a time limit; when it runs out the army is auto-completed and locked in.
+ *
+ * vs AI: the computer builds its army while you build yours (Hard tests many armies in
+ * quick simulated battles in the background, a little each frame).
+ * Online: pressing Ready sends only a fingerprint of your army; both armies are revealed
+ * once both players are ready (see src/net/commit.ts), then the battle starts.
  */
 import Phaser from 'phaser';
 import { ARMY_RULES, SETUP_RULES, UNIT_TYPES, UNITS, type UnitType } from '../config/gameConfig';
+import { DIFFICULTY_NAMES, HardArmyPlanner, quickAiDraft, type Difficulty } from '../ai/armyBuilder';
 import { getMap, OPEN_PLAINS } from '../data/maps';
-import { TEST_ARMY_RED } from '../data/testArmies';
+import { commitHash, randomSalt, verifyReveal } from '../net/commit';
+import { getSession, type NetMessage, type OnlineSession } from '../net/session';
+import { Rng } from '../sim/rng';
 import {
   allPlaced,
   autoComplete,
@@ -35,21 +43,27 @@ import {
   type PlacedGroup,
 } from '../game/armyDraft';
 import { validateArmy } from '../sim';
-import type { MapDef, Stance } from '../sim/types';
+import type { ArmySetup, MapDef, Stance, Team } from '../sim/types';
 import { makeButton, type Button } from '../ui/button';
-import { FONT, GAME_H, GAME_W, TEAM_COLORS } from '../ui/layout';
+import { FONT, GAME_H, GAME_W, TEAM_COLORS, TEAM_NAMES } from '../ui/layout';
 import { STANCE_INFO, UNIT_BLURB, statLine } from '../ui/unitInfo';
 import { drawMapTiles, drawTile, terrainAt } from '../ui/terrainDraw';
 import { drawUnitShape, ensureUnitTextures, unitTextureKey } from '../ui/unitShapes';
 import type { BattleStartData } from './BattleScene';
 
 export interface SetupStartData {
-  mode: 'ai' | 'pvp';
+  /** 'ai': vs the computer (no time limit). 'online': vs a friend (uses the online session). */
+  mode: 'ai' | 'online';
   /** The battlefield chosen on the map select screen (default: Open Plains). */
   mapId?: string;
+  /** vs AI: how strong the computer is. */
+  difficulty?: Difficulty;
   /** Keep the previous army when coming back from a battle. */
   draft?: ArmyDraft;
 }
+
+/** Hard AI planning time per frame (ms): keeps the screen responsive while it thinks. */
+const AI_BUDGET_MS = 8;
 
 const HEADER_H = 70;
 
@@ -65,12 +79,29 @@ const PANEL_X = GRID_X + (ZONE_COLS + PREVIEW_COLS) * CELL + 36;
 const STANCES: Stance[] = ['advance', 'flank'];
 
 export class SetupScene extends Phaser.Scene {
-  private mode: 'ai' | 'pvp' = 'ai';
+  private mode: 'ai' | 'online' = 'ai';
   private map: MapDef = OPEN_PLAINS;
   private draft!: ArmyDraft;
   private step: 'counts' | 'place' = 'counts';
   private deadline = 0;
   private finished = false;
+
+  // vs AI
+  private difficulty: Difficulty = 'medium';
+  private aiSetup: ArmySetup | null = null;
+  private planner: HardArmyPlanner | null = null;
+  /** The player pressed Ready but the Hard AI is still choosing: start as soon as it's done. */
+  private waitingForAi = false;
+
+  // Online
+  private session: OnlineSession | null = null;
+  private mySetup: ArmySetup | null = null;
+  private mySalt = '';
+  private myHash = '';
+  private theirHash = '';
+  private revealSent = false;
+  private theirSetup: ArmySetup | null = null;
+  private waitText: Phaser.GameObjects.Text | null = null;
 
   /** Everything belonging to the current step; destroyed when switching steps. */
   private stepObjects: Phaser.GameObjects.GameObject[] = [];
@@ -106,8 +137,29 @@ export class SetupScene extends Phaser.Scene {
     this.refreshers = [];
     this.selectedType = null;
     this.selected = null;
-    const limit = this.mode === 'pvp' ? SETUP_RULES.pvpTimeLimit : SETUP_RULES.aiTimeLimit;
+    this.difficulty = data?.difficulty ?? 'medium';
+    this.aiSetup = null;
+    this.planner = null;
+    this.waitingForAi = false;
+    this.session = this.mode === 'online' ? getSession() : null;
+    this.mySetup = null;
+    this.mySalt = '';
+    this.myHash = '';
+    this.theirHash = '';
+    this.revealSent = false;
+    this.theirSetup = null;
+    this.waitText = null;
+    const limit = this.mode === 'online' ? SETUP_RULES.pvpTimeLimit : SETUP_RULES.aiTimeLimit;
     this.deadline = limit > 0 ? Date.now() + limit * 1000 : 0;
+  }
+
+  /** Our side of the map: always Blue vs AI; online the host is Blue and the guest Red. */
+  private get myTeam(): Team {
+    return this.session?.myTeam ?? 0;
+  }
+
+  private get enemyTeam(): Team {
+    return this.myTeam === 0 ? 1 : 0;
   }
 
   create(): void {
@@ -141,12 +193,36 @@ export class SetupScene extends Phaser.Scene {
     this.input.on('pointermove', this.onPointerMove, this);
     this.input.on('pointerup', this.onPointerUp, this);
 
+    if (this.mode === 'ai') this.prepareAi();
+    if (this.mode === 'online') {
+      if (!this.session || this.session.closed) {
+        this.scene.start('Online', { action: 'menu' });
+        return;
+      }
+      const s = this.session;
+      s.setHandler((m) => this.onNetMessage(m));
+      this.events.once('shutdown', () => s.setHandler(null));
+    }
+
     this.showCounts();
   }
 
   update(): void {
+    if (this.planner) {
+      // Hard AI: think a little every frame (more once the player is waiting for it).
+      const done = this.planner.work(this.waitingForAi ? 40 : AI_BUDGET_MS);
+      if (this.waitingForAi) this.toastText.setText(`The AI is choosing its army… ${Math.round(this.planner.progress * 100)}%`).setVisible(true);
+      if (done) {
+        this.aiSetup = draftToSetup(this.planner.result(), this.enemyTeam, this.map.width);
+        this.planner = null;
+        if (this.waitingForAi) {
+          this.waitingForAi = false;
+          this.launchVsAi();
+        }
+      }
+    }
     if (!this.deadline || this.finished) {
-      this.timerText.setText(this.mode === 'ai' ? 'No time limit' : '');
+      this.timerText.setText(this.mode === 'ai' ? `vs AI (${DIFFICULTY_NAMES[this.difficulty]}) · no time limit` : '');
       return;
     }
     const left = Math.max(0, Math.ceil((this.deadline - Date.now()) / 1000));
@@ -195,7 +271,7 @@ export class SetupScene extends Phaser.Scene {
   private showCounts(): void {
     this.clearStep();
     this.step = 'counts';
-    this.titleText.setText(`Step 1 of 2 · Pick ${ARMY_RULES.groups} groups of ${GROUP_SIZE}  ·  ${this.map.name}`);
+    this.titleText.setText(`Step 1 of 2 · Pick ${ARMY_RULES.groups} groups of ${GROUP_SIZE}  ·  ${this.map.name}${this.youAre()}`);
 
     const rowH = 78;
     const top = HEADER_H + 14;
@@ -251,7 +327,8 @@ export class SetupScene extends Phaser.Scene {
     const totalText = this.keep(
       this.add.text(24, by + 30, '', { fontFamily: FONT, fontSize: '24px', color: '#f8fafc', fontStyle: 'bold' }).setOrigin(0, 0.5),
     );
-    this.button(470, by, 170, 60, '◀ Maps', () => this.scene.start('MapSelect', { mode: this.mode }));
+    if (this.mode === 'online') this.button(470, by, 170, 60, 'Leave', () => this.scene.start('Menu'));
+    else this.button(470, by, 170, 60, '◀ Maps', () => this.scene.start('MapSelect', { mode: 'ai' }));
     this.button(656, by, 250, 60, 'Suggested mix', () => {
       this.draft.counts = { ...SETUP_RULES.defaultCounts };
       this.refresh();
@@ -281,7 +358,7 @@ export class SetupScene extends Phaser.Scene {
     this.clearStep();
     this.step = 'place';
     trimToCounts(this.draft);
-    this.titleText.setText(`Step 2 of 2 · Place your groups  ·  ${this.map.name}`);
+    this.titleText.setText(`Step 2 of 2 · Place your groups  ·  ${this.map.name}${this.youAre()}`);
     this.selected = null;
     this.selectedType = this.nextTypeToPlace(null);
 
@@ -427,7 +504,9 @@ export class SetupScene extends Phaser.Scene {
     const tx = x + this.map.width * px + 16;
     this.keep(this.add.text(tx, y, this.map.name, { fontFamily: FONT, fontSize: '19px', color: '#f8fafc', fontStyle: 'bold' }));
     this.keep(
-      this.add.text(tx, y + 28, `${this.map.description ?? ''}\nYou start on the left (blue box).`, {
+      this.add.text(tx, y + 28, `${this.map.description ?? ''}\n${this.myTeam === 0
+        ? 'You start on the left (blue box).'
+        : 'You start on the right (red box). Placement is shown mirrored: your front is on the right here.'}`, {
         fontFamily: FONT,
         fontSize: '15px',
         color: '#cbd5e1',
@@ -648,21 +727,126 @@ export class SetupScene extends Phaser.Scene {
 
   // ======================================================================
 
+  /** " · You are Red" online (empty vs AI). */
+  private youAre(): string {
+    return this.mode === 'online' ? `  ·  You are ${TEAM_NAMES[this.myTeam]}` : '';
+  }
+
   private startBattle(): void {
     if (this.finished) return;
-    const player = draftToSetup(this.draft, 0, this.map.width);
-    const errors = validateArmy(player, 0, this.map);
+    const player = draftToSetup(this.draft, this.myTeam, this.map.width);
+    const errors = validateArmy(player, this.myTeam, this.map);
     if (errors.length) {
       this.toast(errors[0]);
       return;
     }
     this.finished = true;
+    this.mySetup = player;
+    if (this.mode === 'online') {
+      this.commitOnline();
+    } else if (this.aiSetup) {
+      this.launchVsAi();
+    } else {
+      this.waitingForAi = true; // update() starts the battle when the Hard AI is done
+    }
+  }
+
+  // ---- vs AI ----
+
+  /** Easy/Medium build their army instantly; Hard starts planning in the background. */
+  private prepareAi(): void {
+    const rng = new Rng((Math.random() * 0xffffffff) >>> 0);
+    if (this.difficulty === 'hard') {
+      this.planner = new HardArmyPlanner(this.map, this.enemyTeam, rng);
+    } else {
+      this.aiSetup = draftToSetup(quickAiDraft(this.difficulty, rng, this.map.height), this.enemyTeam, this.map.width);
+    }
+  }
+
+  private launchVsAi(): void {
     const data: BattleStartData = {
       mapId: this.map.id,
-      setups: [player, TEST_ARMY_RED],
-      setupData: { mode: this.mode, mapId: this.map.id, draft: this.draft } satisfies SetupStartData,
+      setups: [this.mySetup!, this.aiSetup!],
+      ai: this.difficulty,
+      setupData: { mode: 'ai', mapId: this.map.id, difficulty: this.difficulty, draft: this.draft } satisfies SetupStartData,
     };
     // Short pause so a "time's up" message can be read.
     this.time.delayedCall(this.deadline && Date.now() >= this.deadline ? 1200 : 0, () => this.scene.start('Battle', data));
+  }
+
+  // ---- Online: commit, then reveal, then battle ----
+
+  private commitOnline(): void {
+    const s = this.session!;
+    this.mySalt = randomSalt();
+    this.myHash = commitHash(this.mySetup!, this.mySalt);
+    s.send({ t: 'commit', round: s.round, hash: this.myHash });
+    this.showWait('Your army is locked in.\nWaiting for your friend to finish…', '#fde047');
+    this.maybeReveal();
+  }
+
+  private onNetMessage(m: NetMessage): void {
+    const s = this.session!;
+    if (m.t === 'commit' && m.round === s.round) {
+      this.theirHash = m.hash;
+      if (!this.finished) this.toast('Your friend is ready!');
+      this.maybeReveal();
+    } else if (m.t === 'reveal' && m.round === s.round) {
+      const ok = this.theirHash !== '' && verifyReveal(m.setup, m.salt, this.theirHash);
+      const valid = ok && validateArmy(m.setup, this.enemyTeam, this.map).length === 0;
+      if (!valid) {
+        this.fatal("Your friend's army didn't pass the checks (different game versions?). Both refresh the page and try again.");
+        return;
+      }
+      this.theirSetup = m.setup;
+      this.maybeLaunchOnline();
+    } else if (m.t === '_closed') {
+      this.fatal(m.reason);
+    }
+  }
+
+  /** Once both fingerprints are in, show our real army. */
+  private maybeReveal(): void {
+    if (!this.myHash || !this.theirHash || this.revealSent) return;
+    const s = this.session!;
+    s.send({ t: 'reveal', round: s.round, setup: this.mySetup!, salt: this.mySalt });
+    this.revealSent = true;
+    this.maybeLaunchOnline();
+  }
+
+  private maybeLaunchOnline(): void {
+    if (!this.revealSent || !this.theirSetup) return;
+    const s = this.session!;
+    s.setHandler(null); // battle messages wait for the battle screen
+    const setups: [ArmySetup, ArmySetup] = this.myTeam === 0 ? [this.mySetup!, this.theirSetup] : [this.theirSetup, this.mySetup!];
+    const data: BattleStartData = {
+      mapId: this.map.id,
+      seed: s.seed,
+      setups,
+      online: true,
+      myTeam: this.myTeam,
+      setupData: { mode: 'online', mapId: this.map.id, draft: this.draft } satisfies SetupStartData,
+    };
+    this.showWait('Both armies are ready. To battle!', '#86efac');
+    this.time.delayedCall(700, () => this.scene.start('Battle', data));
+  }
+
+  /** A big message in the middle of the screen. */
+  private showWait(text: string, color: string): void {
+    if (!this.waitText) {
+      this.add.rectangle(0, 0, GAME_W, GAME_H, 0x000000, 0.6).setOrigin(0).setDepth(40).setInteractive();
+      this.waitText = this.add
+        .text(GAME_W / 2, GAME_H / 2 - 40, '', { fontFamily: FONT, fontSize: '30px', fontStyle: 'bold', align: 'center', wordWrap: { width: 1000 } })
+        .setOrigin(0.5)
+        .setDepth(41);
+    }
+    this.waitText.setText(text).setColor(color);
+  }
+
+  /** The online game can't go on (friend left, bad data): explain and offer the menu. */
+  private fatal(reason: string): void {
+    this.finished = true;
+    this.showWait(reason, '#fca5a5');
+    makeButton(this, GAME_W / 2 - 140, GAME_H / 2 + 60, 280, 64, 'Back to menu', () => this.scene.start('Menu')).container.setDepth(42);
   }
 }

@@ -1,18 +1,22 @@
 /**
  * Map select: pick the battlefield before building your army.
- * Menu -> Map select -> Army setup -> Battle.
+ *   vs AI:  Menu -> Map select (also choose the AI difficulty) -> Army setup -> Battle
+ *   online: Menu -> Online -> "Create room" -> Map select -> Online (waiting for friend) -> ...
  */
 import Phaser from 'phaser';
 import { TERRAIN, TERRAIN_TYPES } from '../config/gameConfig';
+import { DIFFICULTIES, DIFFICULTY_NAMES, type Difficulty } from '../ai/armyBuilder';
 import { MAPS } from '../data/maps';
 import type { MapDef } from '../sim/types';
-import { makeButton } from '../ui/button';
+import { makeButton, type Button } from '../ui/button';
 import { FONT, GAME_W } from '../ui/layout';
 import { drawMapTiles, drawTile, terrainEffectText } from '../ui/terrainDraw';
+import type { OnlineStartData } from './OnlineScene';
 import type { SetupStartData } from './SetupScene';
 
 export interface MapSelectStartData {
-  mode: 'ai' | 'pvp';
+  /** 'ai': then army setup vs the computer. 'online': the host picks the map for the room. */
+  mode: 'ai' | 'online';
 }
 
 const CARD_W = 392;
@@ -21,8 +25,11 @@ const GAP = 20;
 const PREVIEW_PX = 8; // tile size in the previews: 40 × 20 tiles = 320 × 160
 const TOP = 84;
 
+/** The last difficulty picked (kept while the game is open). */
+let lastDifficulty: Difficulty = 'medium';
+
 export class MapSelectScene extends Phaser.Scene {
-  private mode: 'ai' | 'pvp' = 'ai';
+  private mode: 'ai' | 'online' = 'ai';
 
   constructor() {
     super('MapSelect');
@@ -34,10 +41,14 @@ export class MapSelectScene extends Phaser.Scene {
 
   create(): void {
     this.add.graphics().fillStyle(0x0f172a, 1).fillRect(0, 0, GAME_W, 70);
+    const title = this.mode === 'online' ? 'Choose the battlefield for your room' : 'Choose a battlefield';
     this.add
-      .text(GAME_W / 2, 35, 'Choose a battlefield', { fontFamily: FONT, fontSize: '28px', color: '#f8fafc', fontStyle: 'bold' })
+      .text(this.mode === 'ai' ? 520 : GAME_W / 2, 35, title, { fontFamily: FONT, fontSize: '28px', color: '#f8fafc', fontStyle: 'bold' })
       .setOrigin(0.5);
-    makeButton(this, 16, 8, 150, 54, '◀ Menu', () => this.scene.start('Menu'));
+    makeButton(this, 16, 8, 150, 54, '◀ Back', () =>
+      this.mode === 'online' ? this.scene.start('Online', { action: 'menu' } satisfies OnlineStartData) : this.scene.start('Menu'),
+    );
+    if (this.mode === 'ai') this.createDifficultyPicker();
 
     const x0 = (GAME_W - (3 * CARD_W + 2 * GAP)) / 2;
     const cards: (MapDef | 'random')[] = [...MAPS, 'random'];
@@ -48,6 +59,18 @@ export class MapSelectScene extends Phaser.Scene {
     });
 
     this.drawTerrainLegend(TOP + 2 * (CARD_H + GAP) + 4);
+  }
+
+  /** "AI: Easy | Medium | Hard" in the top bar. */
+  private createDifficultyPicker(): void {
+    this.add.text(812, 35, 'AI:', { fontFamily: FONT, fontSize: '22px', color: '#cbd5e1', fontStyle: 'bold' }).setOrigin(0, 0.5);
+    const buttons: Button[] = DIFFICULTIES.map((d, i) =>
+      makeButton(this, 856 + i * 136, 8, 128, 54, DIFFICULTY_NAMES[d], () => {
+        lastDifficulty = d;
+        buttons.forEach((b, j) => b.setSelected(DIFFICULTIES[j] === d));
+      }),
+    );
+    buttons.forEach((b, j) => b.setSelected(DIFFICULTIES[j] === lastDifficulty));
   }
 
   /** A tappable card with a mini map, the name and a short description. */
@@ -83,8 +106,11 @@ export class MapSelectScene extends Phaser.Scene {
     bg.on('pointerup', () => {
       bg.setStrokeStyle(2, 0x94a3b8);
       const map = card === 'random' ? MAPS[Math.floor(Math.random() * MAPS.length)] : card;
-      const data: SetupStartData = { mode: this.mode, mapId: map.id };
-      this.scene.start('Setup', data);
+      if (this.mode === 'online') {
+        this.scene.start('Online', { action: 'host', mapId: map.id } satisfies OnlineStartData);
+      } else {
+        this.scene.start('Setup', { mode: 'ai', mapId: map.id, difficulty: lastDifficulty } satisfies SetupStartData);
+      }
     });
   }
 

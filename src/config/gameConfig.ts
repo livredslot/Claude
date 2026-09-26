@@ -140,6 +140,32 @@ export const SETUP_RULES = {
   autoFillType: 'swordsman' as UnitType,
 };
 
+/** Computer opponent. */
+export const AI_RULES = {
+  /** Easy: chance (%) that a group gets the Flank stance. */
+  easyFlankChancePct: 20,
+  /** Hard: how many random variations of the basic army styles it also tries. */
+  hardMutations: 3,
+  /** Hard: each test battle is cut off after this many seconds and judged by who is ahead (keeps planning quick on phones). */
+  hardTestSeconds: 30,
+  /** Seconds between the AI's order decisions during battle. */
+  thinkEverySeconds: 1,
+  /** Medium/Hard: order "Attack King" when you have this % (or less) of its number of units left... */
+  attackKingWhenEnemyLeftPct: 30,
+  /** ...or when your King's HP is below this %. */
+  attackKingBelowHpPct: 40,
+  /** Hard: start the battle with "Keep Formation"... */
+  hardOpeningFormation: true,
+  /** ...for at most this many seconds (units break off earlier when they meet enemies). */
+  formationUntilSeconds: 8,
+  /** Hard: defend its King when an enemy is this close to it (tiles)... */
+  defendKingRange: 3,
+  /** ...and its King's HP is below this %. */
+  defendBelowKingHpPct: 90,
+  /** Hard: in the last this-many seconds, attack your King if its own King has less HP. */
+  lateAttackSeconds: 10,
+};
+
 /** Map defaults. */
 export const MAP_RULES = {
   width: 40,

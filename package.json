@@ -20,6 +20,7 @@
   },
   "homepage": "https://github.com/livredslot/Claude#readme",
   "dependencies": {
+    "peerjs": "^1.5.5",
     "phaser": "^3.90.0"
   },
   "devDependencies": {
