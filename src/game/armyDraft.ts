@@ -1,8 +1,8 @@
 /**
  * The army a player is building on the setup screen (not part of the simulation).
  *
- * Soldiers are picked and placed in GROUPS of 5 identical units, standing in a
- * vertical line (5 rows in one column). The King is a single unit on its own.
+ * Soldiers are picked and placed in GROUPS of identical units (ARMY_RULES.groupSize, 3),
+ * standing in a vertical line (one column). The King is a single unit on its own.
  * Always stored in Blue/left-side coordinates: columns 0..5, column 5 = front.
  */
 import { ARMY_RULES, SETUP_RULES, UNIT_TYPES, UNITS, type UnitType } from '../config/gameConfig';
@@ -216,8 +216,8 @@ export function draftToSetup(draft: ArmyDraft, side: 0 | 1, mapWidth: number): A
 // Presets saved in the browser.
 // ---------------------------------------------------------------------------
 
-/** v2 = groups of 5 (v1 saves stored single units and are ignored). */
-const PRESET_KEY = 'mystical-armies.preset.v2';
+/** v3 = groups of 3 (older saves used single units or groups of 5 and are ignored). */
+const PRESET_KEY = 'mystical-armies.preset.v3';
 
 interface SavedDraft {
   counts: Counts;

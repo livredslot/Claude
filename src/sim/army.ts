@@ -1,4 +1,5 @@
 import { ARMY_RULES, UNIT_TYPES, UNITS } from '../config/gameConfig';
+import { terrainOf } from './terrain';
 import type { ArmySetup, MapDef, Team, UnitPlacement } from './types';
 
 /** Total units in an army: all groups of soldiers plus the King. */
@@ -41,6 +42,8 @@ export function validateArmy(setup: ArmySetup, team: Team, map: MapDef): string[
     }
     if (u.tx < minX || u.tx > maxX || u.ty < 0 || u.ty >= map.height) {
       errors.push(`Unit at (${u.tx}, ${u.ty}) is outside the deployment zone.`);
+    } else if (!terrainOf(map).walkableTile(u.tx, u.ty)) {
+      errors.push(`Unit at (${u.tx}, ${u.ty}) is standing in deep water.`);
     }
     const key = `${u.tx},${u.ty}`;
     if (used.has(key)) errors.push(`Two units on the same tile (${u.tx}, ${u.ty}).`);

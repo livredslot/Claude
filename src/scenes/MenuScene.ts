@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { SETUP_RULES } from '../config/gameConfig';
 import { makeButton } from '../ui/button';
 import { FONT, GAME_W } from '../ui/layout';
-import type { SetupStartData } from './SetupScene';
+import type { MapSelectStartData } from './MapSelectScene';
 
 export class MenuScene extends Phaser.Scene {
   constructor() {
@@ -23,13 +23,13 @@ export class MenuScene extends Phaser.Scene {
 
     const w = 460;
     const x = GAME_W / 2 - w / 2;
-    const ai: SetupStartData = { mode: 'ai' };
-    const pvp: SetupStartData = { mode: 'pvp' };
-    makeButton(this, x, 250, w, 76, 'Play vs AI\n(no time limit)', () => this.scene.start('Setup', ai), { fontSize: 24 });
-    makeButton(this, x, 346, w, 76, `PvP  (${SETUP_RULES.pvpTimeLimit} s to build your army)`, () => this.scene.start('Setup', pvp), {
+    const ai: MapSelectStartData = { mode: 'ai' };
+    const pvp: MapSelectStartData = { mode: 'pvp' };
+    makeButton(this, x, 250, w, 76, 'Play vs AI\n(no time limit)', () => this.scene.start('MapSelect', ai), { fontSize: 24 });
+    makeButton(this, x, 346, w, 76, `PvP  (${SETUP_RULES.pvpTimeLimit} s to build your army)`, () => this.scene.start('MapSelect', pvp), {
       fontSize: 24,
     });
-    makeButton(this, x, 442, w, 76, 'Watch a demo battle', () => this.scene.start('Battle', {}), { fontSize: 24 });
+    makeButton(this, x, 442, w, 76, 'Watch a demo battle\n(random map)', () => this.scene.start('Battle', {}), { fontSize: 24 });
 
     this.add
       .text(

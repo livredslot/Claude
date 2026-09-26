@@ -3,8 +3,8 @@
  * All game logic lives in src/sim; this scene only reads the battle state.
  */
 import Phaser from 'phaser';
-import { ARMY_RULES, UNIT_TYPES, UNITS } from '../config/gameConfig';
-import { OPEN_PLAINS } from '../data/maps';
+import { ARMY_RULES, TERRAIN, UNIT_TYPES, UNITS } from '../config/gameConfig';
+import { MAPS, getMap } from '../data/maps';
 import { TEST_ARMY_BLUE, TEST_ARMY_RED } from '../data/testArmies';
 import {
   Battle,
@@ -19,6 +19,7 @@ import {
   type Unit,
 } from '../sim';
 import { makeButton, type Button } from '../ui/button';
+import { drawMapTiles, terrainAt } from '../ui/terrainDraw';
 import { drawUnitShape, ensureUnitTextures, unitTextureKey } from '../ui/unitShapes';
 import {
   FONT,
@@ -57,6 +58,8 @@ function sy(y: number): number {
 }
 
 export interface BattleStartData {
+  /** Battlefield; without it a random map is picked (demo battle). */
+  mapId?: string;
   setups?: [ArmySetup, ArmySetup];
   seed?: number;
   /** When set, this is a replay: these recorded orders are re-issued and the player can't give new ones. */
@@ -103,14 +106,15 @@ export class BattleScene extends Phaser.Scene {
     const setups = data?.setups ?? [TEST_ARMY_BLUE, TEST_ARMY_RED];
     this.isReplay = !!data?.replayCommands;
     this.nextReplayCommand = 0;
-    this.record = { mapId: OPEN_PLAINS.id, seed, setups, commands: data?.replayCommands ?? [] };
+    const mapId = data?.mapId ?? MAPS[Math.floor(Math.random() * MAPS.length)].id;
+    this.record = { mapId, seed, setups, commands: data?.replayCommands ?? [] };
     this.accumulator = 0;
     this.effects = [];
     this.resultShown = false;
   }
 
   create(): void {
-    this.battle = new Battle(OPEN_PLAINS, this.record.setups, this.record.seed);
+    this.battle = new Battle(getMap(this.record.mapId), this.record.setups, this.record.seed);
     this.savePrevPositions();
 
     this.drawMap();
@@ -141,13 +145,7 @@ export class BattleScene extends Phaser.Scene {
   private bakeMapTexture(key: string): void {
     const g = this.make.graphics({}, false);
     const map = this.battle.map;
-    for (let ty = 0; ty < map.height; ty++) {
-      for (let tx = 0; tx < map.width; tx++) {
-        const checker = (tx + ty) % 2 === 0;
-        g.fillStyle(checker ? 0x4a7c3a : 0x467637, 1);
-        g.fillRect(tx * TILE_PX, ty * TILE_PX, TILE_PX, TILE_PX);
-      }
-    }
+    drawMapTiles(g, map, 0, 0, TILE_PX);
     const w = map.width * TILE_PX;
     const h = map.height * TILE_PX;
     // Deployment zones, lightly tinted in team colours.
@@ -265,7 +263,7 @@ export class BattleScene extends Phaser.Scene {
       .setOrigin(0.5, 0.5);
 
     makeButton(this, 16, 22, 150, 56, 'Menu', () => this.scene.start('Menu'));
-    this.add.text(16, 90, `Seed ${this.record.seed}`, { fontFamily: FONT, fontSize: '12px', color: '#64748b' }).setOrigin(0, 0.5);
+    this.add.text(16, 90, `${this.battle.map.name} · Seed ${this.record.seed}`, { fontFamily: FONT, fontSize: '12px', color: '#64748b' }).setOrigin(0, 0.5);
 
     this.speedButton = makeButton(this, 1026, 22, 116, 56, `Speed ${this.speed}×`, () => {
       this.speed = this.speed === 1 ? 2 : 1;
@@ -524,7 +522,7 @@ export class BattleScene extends Phaser.Scene {
 
   private drawDebug(alpha: number): void {
     const g = this.gFx;
-    // Tile grid (all tiles are Flat in Phase 1).
+    // Tile grid.
     g.lineStyle(1, 0x000000, 0.15);
     for (let tx = 0; tx <= this.battle.map.width; tx++) g.lineBetween(tx * TILE_PX, MAP_Y, tx * TILE_PX, MAP_Y + this.battle.map.height * TILE_PX);
     for (let ty = 0; ty <= this.battle.map.height; ty++) g.lineBetween(0, MAP_Y + ty * TILE_PX, GAME_W, MAP_Y + ty * TILE_PX);
@@ -532,8 +530,8 @@ export class BattleScene extends Phaser.Scene {
     for (const u of this.battle.units) {
       if (!u.alive) continue;
       const [x, y] = this.posOf(u, alpha);
-      // Attack range.
-      const rangePx = (Math.sqrt(u.stats.rangeSq) / SUB) * TILE_PX;
+      // Attack range (longer for ranged units on high ground).
+      const rangePx = (Math.sqrt(this.battle.rangeSqOf(u)) / SUB) * TILE_PX;
       g.lineStyle(1, TEAM_COLORS[u.team], 0.35).strokeCircle(x, y, rangePx);
       if (u.type === 'medic') {
         g.lineStyle(1, 0x4ade80, 0.35).strokeCircle(x, y, (Math.sqrt(SIM_CONSTANTS.healRadiusSq) / SUB) * TILE_PX);
@@ -550,9 +548,20 @@ export class BattleScene extends Phaser.Scene {
         `Tick ${this.battle.tick}/${this.battle.maxTicks}`,
         `Seed ${this.battle.seed}`,
         `Hash ${this.battle.stateHash().toString(16).padStart(8, '0')}`,
-        `Tiles: all Flat (Open Plains)`,
+        `Map: ${this.battle.map.name}`,
+        `Tile under pointer: ${this.pointerTerrain()}`,
       ].join('\n'),
     );
+  }
+
+  /** Terrain name of the tile under the mouse/finger (debug overlay). */
+  private pointerTerrain(): string {
+    const p = this.input.activePointer;
+    const map = this.battle.map;
+    const tx = Math.floor(p.x / TILE_PX);
+    const ty = Math.floor((p.y - MAP_Y) / TILE_PX);
+    if (tx < 0 || ty < 0 || tx >= map.width || ty >= map.height) return '-';
+    return `${TERRAIN[terrainAt(map, tx, ty)].name} (${tx}, ${ty})`;
   }
 
   // ------------------------------------------------------------------
@@ -614,17 +623,17 @@ export class BattleScene extends Phaser.Scene {
         .setOrigin(0.5, 0),
     );
 
-    const { seed, setups } = this.record;
+    const { seed, setups, mapId } = this.record;
     const setupData = this.startData.setupData;
     const bw = 210;
     const gap = 16;
     const bx = GAME_W / 2 - (bw * 3 + gap * 2) / 2;
     const by = y0 + h - 80;
     const replay = makeButton(this, bx, by, bw, 60, 'Watch replay', () =>
-      this.scene.restart({ ...this.startData, seed, setups, replayCommands: [...this.battle.commandLog] }),
+      this.scene.restart({ ...this.startData, mapId, seed, setups, replayCommands: [...this.battle.commandLog] }),
     );
     const again = makeButton(this, bx + bw + gap, by, bw, 60, 'Rematch', () =>
-      this.scene.restart({ ...this.startData, seed: undefined, setups, replayCommands: undefined }),
+      this.scene.restart({ ...this.startData, mapId, seed: undefined, setups, replayCommands: undefined }),
     );
     const change = makeButton(this, bx + 2 * (bw + gap), by, bw, 60, setupData ? 'Change army' : 'Menu', () =>
       setupData ? this.scene.start('Setup', setupData) : this.scene.start('Menu'),

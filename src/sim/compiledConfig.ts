@@ -3,7 +3,17 @@
  * units the simulation uses (sub-tiles, centi-HP, ticks). Rounding happens once
  * here, so the simulation itself only ever sees integers.
  */
-import { KING_RULES, SIM_RULES, STANCE_RULES, UNITS, UNIT_RULES, UNIT_TYPES, type UnitType } from '../config/gameConfig';
+import {
+  KING_RULES,
+  SIM_RULES,
+  STANCE_RULES,
+  TERRAIN,
+  TERRAIN_TYPES,
+  UNITS,
+  UNIT_RULES,
+  UNIT_TYPES,
+  type UnitType,
+} from '../config/gameConfig';
 import { HP_SCALE, tilesToSub } from './fixed';
 
 const TPS = SIM_RULES.ticksPerSecond;
@@ -20,7 +30,9 @@ export interface CompiledStats {
   maxHp: number; // centi-HP
   damage: number; // centi-HP
   attackTicks: number;
-  rangeSq: number; // sub-tiles²
+  rangeSq: number; // sub-tiles², on flat ground
+  /** Attack range² while standing on each terrain type (indexed by terrain code). */
+  rangeSqOn: number[];
   speed: number; // sub-tiles per tick
   value: number;
   ranged: boolean;
@@ -28,11 +40,15 @@ export interface CompiledStats {
 
 function compileUnit(type: UnitType): CompiledStats {
   const s = UNITS[type];
+  const rangeSqOn = TERRAIN_TYPES.map((t) =>
+    sq(tilesToSub(s.range + (s.ranged ? TERRAIN[t].rangedRangeBonus : 0) + SIM_RULES.rangeTolerance)),
+  );
   return {
     maxHp: Math.round(s.hp * HP_SCALE),
     damage: Math.round(s.damage * HP_SCALE),
     attackTicks: secondsToTicks(s.attackInterval),
     rangeSq: sq(tilesToSub(s.range + SIM_RULES.rangeTolerance)),
+    rangeSqOn,
     speed: Math.round(tilesToSub(s.speed) / TPS),
     value: s.value,
     ranged: s.ranged,
@@ -67,6 +83,9 @@ export const C = {
   kingBehind: tilesToSub(KING_RULES.behindArmy),
   kingFollowSlackSq: sq(tilesToSub(KING_RULES.followSlack)),
 
+  /** Indexed by terrain code (position in TERRAIN_TYPES). */
+  terrainSpeedPct: TERRAIN_TYPES.map((t) => TERRAIN[t].speedPct),
+  terrainDamagePct: TERRAIN_TYPES.map((t) => TERRAIN[t].damagePct),
 
   formationEngageSq: sq(tilesToSub(STANCE_RULES.formationEngageRange)),
   flankEngageSq: sq(tilesToSub(STANCE_RULES.flankEngageRange)),

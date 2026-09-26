@@ -1,12 +1,13 @@
 /**
  * Army setup screen, in two steps:
- *   1. Counts: choose how many GROUPS of 5 of each unit (+/−), exactly 10 groups, plus 1 King.
- *   2. Place: tap to place each group (a vertical line of 5) in your deployment zone, set stances.
+ *   1. Counts: choose how many GROUPS of 3 of each unit (+/−), exactly 12 groups, plus 1 King.
+ *   2. Place: tap to place each group (a vertical line of 3) in your deployment zone, set stances.
+ *   (Group size and number of groups come from ARMY_RULES in the config.)
  * In PvP there is a time limit; when it runs out the army is auto-completed and locked in.
  */
 import Phaser from 'phaser';
 import { ARMY_RULES, SETUP_RULES, UNIT_TYPES, UNITS, type UnitType } from '../config/gameConfig';
-import { OPEN_PLAINS } from '../data/maps';
+import { getMap, OPEN_PLAINS } from '../data/maps';
 import { TEST_ARMY_RED } from '../data/testArmies';
 import {
   allPlaced,
@@ -34,20 +35,22 @@ import {
   type PlacedGroup,
 } from '../game/armyDraft';
 import { validateArmy } from '../sim';
-import type { Stance } from '../sim/types';
+import type { MapDef, Stance } from '../sim/types';
 import { makeButton, type Button } from '../ui/button';
 import { FONT, GAME_H, GAME_W, TEAM_COLORS } from '../ui/layout';
 import { STANCE_INFO, UNIT_BLURB, statLine } from '../ui/unitInfo';
+import { drawMapTiles, drawTile, terrainAt } from '../ui/terrainDraw';
 import { drawUnitShape, ensureUnitTextures, unitTextureKey } from '../ui/unitShapes';
 import type { BattleStartData } from './BattleScene';
 
 export interface SetupStartData {
   mode: 'ai' | 'pvp';
+  /** The battlefield chosen on the map select screen (default: Open Plains). */
+  mapId?: string;
   /** Keep the previous army when coming back from a battle. */
   draft?: ArmyDraft;
 }
 
-const MAP = OPEN_PLAINS;
 const HEADER_H = 70;
 
 // Placement grid (step 2).
@@ -63,6 +66,7 @@ const STANCES: Stance[] = ['advance', 'flank'];
 
 export class SetupScene extends Phaser.Scene {
   private mode: 'ai' | 'pvp' = 'ai';
+  private map: MapDef = OPEN_PLAINS;
   private draft!: ArmyDraft;
   private step: 'counts' | 'place' = 'counts';
   private deadline = 0;
@@ -94,6 +98,7 @@ export class SetupScene extends Phaser.Scene {
 
   init(data: SetupStartData): void {
     this.mode = data?.mode ?? 'ai';
+    this.map = data?.mapId ? getMap(data.mapId) : OPEN_PLAINS;
     this.draft = data?.draft ?? newDraft();
     this.step = 'counts';
     this.finished = false;
@@ -148,7 +153,7 @@ export class SetupScene extends Phaser.Scene {
     this.timerText.setText(`⏱ ${left} s`);
     this.timerText.setColor(left <= 10 ? '#f87171' : '#fde047');
     if (left <= 0) {
-      autoComplete(this.draft, MAP.height);
+      autoComplete(this.draft, this.map.height);
       this.toast("Time's up! Missing units were added and placed automatically.");
       this.startBattle();
     }
@@ -184,13 +189,13 @@ export class SetupScene extends Phaser.Scene {
   }
 
   // ======================================================================
-  // Step 1: counts (in groups of 5)
+  // Step 1: counts (in groups)
   // ======================================================================
 
   private showCounts(): void {
     this.clearStep();
     this.step = 'counts';
-    this.titleText.setText(`Step 1 of 2 · Pick ${ARMY_RULES.groups} groups of ${GROUP_SIZE}`);
+    this.titleText.setText(`Step 1 of 2 · Pick ${ARMY_RULES.groups} groups of ${GROUP_SIZE}  ·  ${this.map.name}`);
 
     const rowH = 78;
     const top = HEADER_H + 14;
@@ -246,7 +251,7 @@ export class SetupScene extends Phaser.Scene {
     const totalText = this.keep(
       this.add.text(24, by + 30, '', { fontFamily: FONT, fontSize: '24px', color: '#f8fafc', fontStyle: 'bold' }).setOrigin(0, 0.5),
     );
-    this.button(470, by, 170, 60, 'Menu', () => this.scene.start('Menu'));
+    this.button(470, by, 170, 60, '◀ Maps', () => this.scene.start('MapSelect', { mode: this.mode }));
     this.button(656, by, 250, 60, 'Suggested mix', () => {
       this.draft.counts = { ...SETUP_RULES.defaultCounts };
       this.refresh();
@@ -276,7 +281,7 @@ export class SetupScene extends Phaser.Scene {
     this.clearStep();
     this.step = 'place';
     trimToCounts(this.draft);
-    this.titleText.setText('Step 2 of 2 · Place your groups');
+    this.titleText.setText(`Step 2 of 2 · Place your groups  ·  ${this.map.name}`);
     this.selected = null;
     this.selectedType = this.nextTypeToPlace(null);
 
@@ -372,7 +377,7 @@ export class SetupScene extends Phaser.Scene {
       this.refresh();
     });
     this.button(px + 2 * (aw + gap), y, aw, 58, 'Auto-place', () => {
-      if (!autoPlace(this.draft, MAP.height, this.defaultStance)) this.toast('Not enough room for every group. Move some groups.');
+      if (!autoPlace(this.draft, this.map.height, this.defaultStance)) this.toast('Not enough room for every group. Move some groups.');
       this.selected = null;
       this.selectedType = this.nextTypeToPlace(null);
       this.refresh();
@@ -382,7 +387,7 @@ export class SetupScene extends Phaser.Scene {
     );
     y += 58 + gap;
     this.button(px, y, aw, 58, 'Load', () => {
-      const loaded = loadPreset(MAP.height);
+      const loaded = loadPreset(this.map.height);
       if (!loaded) {
         this.toast('No saved formation yet.');
         return;
@@ -398,6 +403,8 @@ export class SetupScene extends Phaser.Scene {
       this.refresh();
     });
     const ready = this.button(px + (aw + gap), y, 3 * aw + 2 * gap, 58, 'Ready: start battle  ▶', () => this.startBattle(), 22);
+    y += 58 + 16;
+    this.drawMiniMap(px, y);
     this.refreshers.push(() => {
       const soldiers = this.draft.groups.filter((g) => g.type !== 'king').length;
       const king = this.draft.groups.some((g) => g.type === 'king');
@@ -407,6 +414,27 @@ export class SetupScene extends Phaser.Scene {
     });
     this.refreshers.push(() => this.drawGrid());
     this.refresh();
+  }
+
+  /** The whole battlefield in small, with your zone outlined, so you can plan around the terrain. */
+  private drawMiniMap(x: number, y: number): void {
+    const px = 6;
+    const g = this.keep(this.add.graphics());
+    drawMapTiles(g, this.map, x, y, px);
+    g.lineStyle(2, 0x93c5fd, 1).strokeRect(x, y, ZONE_COLS * px, this.map.height * px);
+    g.lineStyle(2, 0xfca5a5, 1).strokeRect(x + (this.map.width - ZONE_COLS) * px, y, ZONE_COLS * px, this.map.height * px);
+    g.lineStyle(1, 0x0f172a, 1).strokeRect(x, y, this.map.width * px, this.map.height * px);
+    const tx = x + this.map.width * px + 16;
+    this.keep(this.add.text(tx, y, this.map.name, { fontFamily: FONT, fontSize: '19px', color: '#f8fafc', fontStyle: 'bold' }));
+    this.keep(
+      this.add.text(tx, y + 28, `${this.map.description ?? ''}\nYou start on the left (blue box).`, {
+        fontFamily: FONT,
+        fontSize: '15px',
+        color: '#cbd5e1',
+        wordWrap: { width: GAME_W - tx - 24 },
+        lineSpacing: 4,
+      }),
+    );
   }
 
   private nextTypeToPlace(after: UnitType | null): UnitType | null {
@@ -422,23 +450,22 @@ export class SetupScene extends Phaser.Scene {
     const g = this.gridGfx;
     g.clear();
     const cols = ZONE_COLS + PREVIEW_COLS;
-    for (let ty = 0; ty < MAP.height; ty++) {
+    for (let ty = 0; ty < this.map.height; ty++) {
       for (let tx = 0; tx < cols; tx++) {
         const inZone = tx < ZONE_COLS;
         const x = GRID_X + tx * CELL;
         const y = GRID_Y + ty * CELL;
-        g.fillStyle((tx + ty) % 2 === 0 ? 0x4a7c3a : 0x467637, inZone ? 1 : 0.45);
-        g.fillRect(x, y, CELL, CELL);
+        drawTile(g, terrainAt(this.map, tx, ty), x, y, CELL, (tx + ty) % 2 === 0, inZone ? 1 : 0.45);
         if (inZone) g.fillStyle(TEAM_COLORS[0], 0.18).fillRect(x, y, CELL, CELL);
       }
     }
     g.lineStyle(1, 0x000000, 0.2);
-    for (let tx = 0; tx <= ZONE_COLS; tx++) g.lineBetween(GRID_X + tx * CELL, GRID_Y, GRID_X + tx * CELL, GRID_Y + MAP.height * CELL);
-    for (let ty = 0; ty <= MAP.height; ty++) g.lineBetween(GRID_X, GRID_Y + ty * CELL, GRID_X + ZONE_COLS * CELL, GRID_Y + ty * CELL);
-    g.lineStyle(3, 0x93c5fd, 0.9).strokeRect(GRID_X, GRID_Y, ZONE_COLS * CELL, MAP.height * CELL);
+    for (let tx = 0; tx <= ZONE_COLS; tx++) g.lineBetween(GRID_X + tx * CELL, GRID_Y, GRID_X + tx * CELL, GRID_Y + this.map.height * CELL);
+    for (let ty = 0; ty <= this.map.height; ty++) g.lineBetween(GRID_X, GRID_Y + ty * CELL, GRID_X + ZONE_COLS * CELL, GRID_Y + ty * CELL);
+    g.lineStyle(3, 0x93c5fd, 0.9).strokeRect(GRID_X, GRID_Y, ZONE_COLS * CELL, this.map.height * CELL);
     // Arrow toward the enemy.
     const ax = GRID_X + (ZONE_COLS + PREVIEW_COLS / 2) * CELL;
-    const ay = GRID_Y + (MAP.height * CELL) / 2;
+    const ay = GRID_Y + (this.map.height * CELL) / 2;
     g.fillStyle(0xffffff, 0.35).fillTriangle(ax - 14, ay - 24, ax - 14, ay + 24, ax + 18, ay);
 
     this.unitLayer.removeAll(true);
@@ -477,15 +504,15 @@ export class SetupScene extends Phaser.Scene {
   private tileAt(p: Phaser.Input.Pointer): [number, number] | null {
     const tx = Math.floor((p.x - GRID_X) / CELL);
     const ty = Math.floor((p.y - GRID_Y) / CELL);
-    if (tx < 0 || tx >= ZONE_COLS || ty < 0 || ty >= MAP.height) return null;
+    if (tx < 0 || tx >= ZONE_COLS || ty < 0 || ty >= this.map.height) return null;
     return [tx, ty];
   }
 
   /** Move a group so it is centred on (tx, row), if there is room. */
   private tryMove(grp: PlacedGroup, tx: number, row: number): boolean {
-    const ty = topRowFor(grp.type, row, MAP.height);
+    const ty = topRowFor(grp.type, row, this.map.height);
     if (grp.tx === tx && grp.ty === ty) return false;
-    if (!fits(this.draft, grp.type, tx, ty, MAP.height, this.draft.groups.indexOf(grp))) return false;
+    if (!fits(this.draft, grp.type, tx, ty, this.map.height, this.draft.groups.indexOf(grp))) return false;
     grp.tx = tx;
     grp.ty = ty;
     return true;
@@ -545,14 +572,14 @@ export class SetupScene extends Phaser.Scene {
     const rowForB = centre(posA, a.type);
     a.tx = -99; // temporarily out of the way
     b.tx = -99;
-    const aTy = topRowFor(a.type, rowForA, MAP.height);
-    const bTy = topRowFor(b.type, rowForB, MAP.height);
-    const aOk = fits(this.draft, a.type, posB.tx, aTy, MAP.height);
+    const aTy = topRowFor(a.type, rowForA, this.map.height);
+    const bTy = topRowFor(b.type, rowForB, this.map.height);
+    const aOk = fits(this.draft, a.type, posB.tx, aTy, this.map.height);
     if (aOk) {
       a.tx = posB.tx;
       a.ty = aTy;
     }
-    const bOk = aOk && fits(this.draft, b.type, posA.tx, bTy, MAP.height);
+    const bOk = aOk && fits(this.draft, b.type, posA.tx, bTy, this.map.height);
     if (aOk && bOk) {
       b.tx = posA.tx;
       b.ty = bTy;
@@ -574,8 +601,8 @@ export class SetupScene extends Phaser.Scene {
       this.toast(`No ${UNITS[type].name} groups left to place.`);
       return;
     }
-    const ty = topRowFor(type, row, MAP.height);
-    if (!fits(this.draft, type, tx, ty, MAP.height)) {
+    const ty = topRowFor(type, row, this.map.height);
+    if (!fits(this.draft, type, tx, ty, this.map.height)) {
       this.toast(`Not enough room there: a group needs ${groupSize(type)} free squares in a column.`);
       return;
     }
@@ -623,16 +650,17 @@ export class SetupScene extends Phaser.Scene {
 
   private startBattle(): void {
     if (this.finished) return;
-    const player = draftToSetup(this.draft, 0, MAP.width);
-    const errors = validateArmy(player, 0, MAP);
+    const player = draftToSetup(this.draft, 0, this.map.width);
+    const errors = validateArmy(player, 0, this.map);
     if (errors.length) {
       this.toast(errors[0]);
       return;
     }
     this.finished = true;
     const data: BattleStartData = {
+      mapId: this.map.id,
       setups: [player, TEST_ARMY_RED],
-      setupData: { mode: this.mode, draft: this.draft } satisfies SetupStartData,
+      setupData: { mode: this.mode, mapId: this.map.id, draft: this.draft } satisfies SetupStartData,
     };
     // Short pause so a "time's up" message can be read.
     this.time.delayedCall(this.deadline && Date.now() >= this.deadline ? 1200 : 0, () => this.scene.start('Battle', data));

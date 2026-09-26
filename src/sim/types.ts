@@ -35,6 +35,8 @@ export type TileChar = '.' | '^' | '~' | '-';
 export interface MapDef {
   id: string;
   name: string;
+  /** One short sentence for the map select screen. */
+  description?: string;
   width: number;
   height: number;
   /** `height` strings, each `width` characters long. */

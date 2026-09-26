@@ -1,11 +1,17 @@
 # Mystical Armies
 
-A 2D auto-battle strategy game. Two armies (10 groups of 5 soldiers + 1 King = 51 units each)
+A 2D auto-battle strategy game. Two armies (12 groups of 3 soldiers + 1 King = 37 units each)
 are placed secretly, then fight automatically for up to 60 seconds. Built with **Phaser 3**, **Vite** and **TypeScript**.
 
-**Current status: Phase 1 + King + army setup screen.**
+**Current status: Phase 3 — terrain and maps.**
 
-- **King:** every army has exactly 1 King (on top of the 10 groups). If your King dies, you lose immediately.
+- **Maps:** Open Plains, River Crossing, Twin Peaks, Mountain Pass and Lake Valley (all mirror-symmetrical),
+  picked on the map select screen after the menu.
+- **Terrain:** Mountain = slow (35%) but high ground (+25% damage, Archers/Mage +1 range). Deep water = can't
+  be crossed (arrows and spells fly over). Shallow water = slow (50%) and −25% damage. Units find their own way
+  around obstacles. All numbers are in `TERRAIN` in `src/config/gameConfig.ts`.
+
+- **King:** every army has exactly 1 King (on top of the 12 groups). If your King dies, you lose immediately.
   If both Kings survive the 60 seconds, the King with more HP wins; equal HP is a draw.
   The King follows a few tiles behind its army; Medics follow the army itself.
   Every unit simply fights the nearest enemy; only the player's orders change that.
@@ -14,8 +20,8 @@ are placed secretly, then fight automatically for up to 60 seconds. Built with *
   find a target). Tap any enemy to make your whole army focus it. Orders are recorded, so replays repeat them.
 - **Stances** (set per group or for all groups on the setup screen): Advance or Flank.
 - Units walk through their own army, so fast units aren't stuck behind slow ones.
-- **Army setup:** Step 1 picks 10 groups of 5 (+/−; max 1 group of Medics and of Mages); Step 2 places
-  each group as a vertical line of 5 by tapping (tap a group, then a spot, to move it), with stances,
+- **Army setup:** Step 1 picks 12 groups of 3 (+/−; max 1 group of Medics and of Mages); Step 2 places
+  each group as a vertical line of 3 by tapping (tap a group, then a spot, to move it), with stances,
   Auto-place, Save/Load. PvP gives you 60 seconds (missing groups are auto-filled when time runs out);
   vs AI has no limit.
 - The opponent is a fixed practice army until the AI (Phase 5) and online PvP (Phase 8) are built.
@@ -39,6 +45,7 @@ phone connected to the same Wi-Fi to test on mobile.
 | `npm run dev` | Run the game locally with live reload |
 | `npm test` | Run the automated tests (determinism, rules, speed) |
 | `npm run sim -- 1234` | Simulate one battle with seed 1234 without graphics and print the result |
+| `npm run sim -- 1234 lake-valley` | Same, on another map (`open-plains`, `river-crossing`, `twin-peaks`, `mountain-pass`, `lake-valley`) |
 | `npm run typecheck` | Check the TypeScript code for type errors |
 | `npm run build` | Build the production version into `dist/` |
 | `npm run preview` | Serve the built `dist/` folder locally |
@@ -51,13 +58,15 @@ src/
   config/gameConfig.ts   ALL balance numbers (HP, damage, speed, ranges, caps...). Tune here.
   sim/                   Pure deterministic simulation: no Phaser, no DOM, no Math.random
     battle.ts            The battle: targeting, movement, attacks, healing, spells, win rules
+    terrain.ts           Map tiles, terrain lookups and path-finding around obstacles
     compiledConfig.ts    Turns config numbers into integers (sub-tiles, centi-HP, ticks)
     fixed.ts             Integer maths helpers
     rng.ts               Seeded random generator (mulberry32)
-    army.ts              Army validation (10 groups of 5 + King, limits, deployment zone)
+    army.ts              Army validation (12 groups of 3 + King, limits, deployment zone)
   data/                  Maps and the hard-coded Phase 1 test armies
   game/armyDraft.ts      Army being built on the setup screen: counts, auto-place, presets
   scenes/MenuScene.ts    Start menu
+  scenes/MapSelectScene.ts  Choose the battlefield
   scenes/SetupScene.ts   Army setup: counts, then placement (timer in PvP)
   scenes/BattleScene.ts  Phaser: draws the battle, HUD, effects, results
   ui/                    Layout constants and the touch-friendly button

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Battle, simulateBattle, validateArmy, Rng } from '../src/sim';
+import { Battle, armySize, simulateBattle, validateArmy, Rng } from '../src/sim';
 import type { ArmySetup } from '../src/sim';
 import { OPEN_PLAINS } from '../src/data/maps';
 import { TEST_ARMY_BLUE, TEST_ARMY_RED } from '../src/data/testArmies';
@@ -28,7 +28,7 @@ function tickHashes(setups: [ArmySetup, ArmySetup], seed: number): number[] {
 }
 
 describe('test armies', () => {
-  it('are valid 25-unit armies inside their deployment zones', () => {
+  it('are valid 37-unit armies inside their deployment zones', () => {
     expect(validateArmy(TEST_ARMY_BLUE, 0, OPEN_PLAINS)).toEqual([]);
     expect(validateArmy(TEST_ARMY_RED, 1, OPEN_PLAINS)).toEqual([]);
   });
@@ -93,7 +93,7 @@ describe('battle rules', () => {
         // Only ends early; the loser's King is dead.
         expect(r.tick).toBeLessThanOrEqual(1200);
       } else if (r.reason === 'annihilation') {
-        expect(r.winner === null ? 0 : r.unitsLost[r.winner === 0 ? 1 : 0]).toBe(r.winner === null ? 0 : 25);
+        expect(r.winner === null ? 0 : r.unitsLost[r.winner === 0 ? 1 : 0]).toBe(r.winner === null ? 0 : armySize());
       } else {
         // Time's up with both Kings alive: the King with more HP wins, equal HP is a draw.
         expect(r.tick).toBe(1200);

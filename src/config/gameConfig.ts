@@ -109,15 +109,15 @@ export const STANCE_RULES = {
 /** Army composition rules. */
 export const ARMY_RULES = {
   /** Soldiers are picked in groups of this many identical units. */
-  groupSize: 5,
-  /** Each army has exactly this many groups (10 × 5 = 50 soldiers), plus 1 King. */
-  groups: 10,
+  groupSize: 3,
+  /** Each army has exactly this many groups (12 × 3 = 36 soldiers), plus 1 King = 37 units. */
+  groups: 12,
   /** Most groups allowed per unit type. */
   maxGroups: {
-    swordsman: 10,
-    spearman: 10,
-    horseman: 10,
-    archer: 10,
+    swordsman: 12,
+    spearman: 12,
+    horseman: 12,
+    archer: 12,
     medic: 1,
     mage: 1,
   } as Record<Exclude<UnitType, 'king'>, number>,
@@ -132,7 +132,7 @@ export const SETUP_RULES = {
   /** Seconds to choose and place the army against the AI. 0 = no limit. */
   aiTimeLimit: 0,
   /** Starting number of GROUPS per type on the setup screen (must add up to ARMY_RULES.groups; King is always 1). */
-  defaultCounts: { swordsman: 2, spearman: 2, horseman: 2, archer: 2, medic: 1, mage: 1, king: 1 } as Record<
+  defaultCounts: { swordsman: 3, spearman: 2, horseman: 2, archer: 3, medic: 1, mage: 1, king: 1 } as Record<
     UnitType,
     number
   >,
@@ -144,6 +144,38 @@ export const SETUP_RULES = {
 export const MAP_RULES = {
   width: 40,
   height: 20,
+};
+
+export type TerrainType = 'flat' | 'mountain' | 'deep' | 'shallow';
+
+export const TERRAIN_TYPES: readonly TerrainType[] = ['flat', 'mountain', 'deep', 'shallow'];
+
+export interface TerrainStats {
+  /** Display name. */
+  name: string;
+  /** Can units walk on it? (Arrows and spells always fly over every tile.) */
+  walkable: boolean;
+  /** Walking speed on this tile, % of the unit's normal speed. */
+  speedPct: number;
+  /** Damage dealt BY a unit standing on this tile, % of normal. */
+  damagePct: number;
+  /** Extra attack range (tiles) for RANGED units (Archers, Mages) standing on this tile. */
+  rangedRangeBonus: number;
+}
+
+/**
+ * What each kind of ground does. A unit is "on" the tile under its centre.
+ * Units find their way around deep water, and around mountains or shallow water
+ * when going around is quicker than wading/climbing through.
+ */
+export const TERRAIN: Record<TerrainType, TerrainStats> = {
+  flat: { name: 'Flat', walkable: true, speedPct: 100, damagePct: 100, rangedRangeBonus: 0 },
+  /** High ground: slow to climb, but units on top hit harder and shoot further. */
+  mountain: { name: 'Mountain', walkable: true, speedPct: 35, damagePct: 125, rangedRangeBonus: 1 },
+  /** Nobody can walk here. */
+  deep: { name: 'Deep water', walkable: false, speedPct: 0, damagePct: 100, rangedRangeBonus: 0 },
+  /** Wading: slow, and units standing in it fight worse. */
+  shallow: { name: 'Shallow water', walkable: true, speedPct: 50, damagePct: 75, rangedRangeBonus: 0 },
 };
 
 /** Core simulation settings. Changing these changes every battle result. */

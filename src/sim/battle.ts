@@ -14,6 +14,7 @@ import { C, STATS, type CompiledStats } from './compiledConfig';
 import { SUB, applyPct, dist2, isqrt, rot45, rotMinus45 } from './fixed';
 import { Hasher } from './hash';
 import { Rng } from './rng';
+import { terrainOf, type Terrain } from './terrain';
 import { ARMY_RULES, UNIT_TYPES } from '../config/gameConfig';
 import type {
   ArmySetup,
@@ -133,6 +134,8 @@ export class Battle {
   readonly focus: [number, number] = [-1, -1];
   /** Every order given so far, for replays and (later) sending to the other player. */
   readonly commandLog: RecordedCommand[] = [];
+  /** The map's tiles (terrain effects and path-finding). */
+  readonly terrain: Terrain;
   private readonly rng: Rng;
   private readonly widthSub: number;
   private readonly heightSub: number;
@@ -143,6 +146,7 @@ export class Battle {
     this.map = map;
     this.seed = seed >>> 0;
     this.rng = new Rng(this.seed);
+    this.terrain = terrainOf(map);
     this.widthSub = map.width * SUB;
     this.heightSub = map.height * SUB;
 
@@ -356,7 +360,12 @@ export class Battle {
   }
 
   private inRange(u: Unit, t: Unit): boolean {
-    return dist2(u.x, u.y, t.x, t.y) <= u.stats.rangeSq;
+    return dist2(u.x, u.y, t.x, t.y) <= this.rangeSqOf(u);
+  }
+
+  /** Attack range² right now (ranged units reach further from high ground). */
+  rangeSqOf(u: Unit): number {
+    return u.stats.rangeSqOn[this.terrain.codeAt(u.x, u.y)];
   }
 
   // ------------------------------------------------------------------
@@ -377,7 +386,7 @@ export class Battle {
 
     // 'Keep Formation' order: march with the block until a target is found.
     if (u.inFormation) {
-      const engageSq = u.stats.ranged ? u.stats.rangeSq : C.formationEngageSq;
+      const engageSq = u.stats.ranged ? this.rangeSqOf(u) : C.formationEngageSq;
       if (this.anyEnemyWithin(u, engageSq)) {
         u.inFormation = false;
       } else {
@@ -426,8 +435,13 @@ export class Battle {
     return u.cooldown === 0;
   }
 
+  /** A unit's damage adjusted for the ground it stands on (high ground +, shallow water −). */
+  private terrainDamage(u: Unit): number {
+    return applyPct(u.stats.damage, C.terrainDamagePct[this.terrain.codeAt(u.x, u.y)]);
+  }
+
   private attack(u: Unit, t: Unit): void {
-    let dmg = u.stats.damage;
+    let dmg = this.terrainDamage(u);
     if (u.type === 'spearman' && t.type === 'horseman') dmg *= C.spearmanVsHorseMult;
     if (u.type === 'archer' && t.type === 'swordsman') dmg = applyPct(dmg, C.swordsmanArrowPct);
     const melee = !u.stats.ranged;
@@ -504,7 +518,7 @@ export class Battle {
   private actMage(u: Unit, t: Unit): void {
     // With an order, walk until the ordered target itself is in range.
     const ordered = this.orderedTarget(u.team);
-    const canCast = ordered ? this.inRange(u, ordered) : this.anyEnemyWithin(u, u.stats.rangeSq);
+    const canCast = ordered ? this.inRange(u, ordered) : this.anyEnemyWithin(u, this.rangeSqOf(u));
     if (canCast) {
       this.progressCast(u);
     } else {
@@ -523,10 +537,11 @@ export class Battle {
     const center = ordered && this.inRange(u, ordered) ? { x: ordered.x, y: ordered.y } : this.bestCastPoint(u);
     if (!center) return;
     this.face(u, center.x - u.x, center.y - u.y);
+    const dmg = this.terrainDamage(u);
     for (const e of this.units) {
       if (!e.alive || e.team === u.team) continue; // No friendly fire.
       if (dist2(center.x, center.y, e.x, e.y) <= C.mageRadiusSq) {
-        this.pendingDamage.push({ target: e.id, amount: u.stats.damage, melee: false, source: u.id });
+        this.pendingDamage.push({ target: e.id, amount: dmg, melee: false, source: u.id });
       }
     }
     this.events.push({ kind: 'spell', from: u.id, x: center.x, y: center.y, radius: C.mageRadius });
@@ -666,16 +681,19 @@ export class Battle {
   }
 
   /**
-   * Step toward (gx, gy). If the direct step is blocked by another unit, try
-   * sliding at ±45° then ±90° (the side that gets closer to the goal first).
+   * Step toward (gx, gy), going around deep water (and around slow ground when that is
+   * quicker). Speed depends on the ground the unit stands on. If the direct step is
+   * blocked by an enemy or unwalkable ground, try sliding at ±45° then ±90° (the side
+   * that gets closer to the goal first).
    */
-  private moveToward(u: Unit, gx: number, gy: number): boolean {
+  private moveToward(u: Unit, goalX: number, goalY: number): boolean {
+    const [gx, gy] = this.terrain.waypoint(u.x, u.y, goalX, goalY, u.team === 1);
     const dx = gx - u.x;
     const dy = gy - u.y;
     const d2 = dx * dx + dy * dy;
     if (d2 === 0) return false;
     const d = isqrt(d2);
-    const sp = u.stats.speed;
+    const sp = Math.max(1, applyPct(u.stats.speed, C.terrainSpeedPct[this.terrain.codeAt(u.x, u.y)]));
     let sx: number;
     let sy: number;
     if (d <= sp) {
@@ -710,7 +728,7 @@ export class Battle {
       const nx = Math.min(Math.max(u.x + cx, r), this.widthSub - r);
       const ny = Math.min(Math.max(u.y + cy, r), this.heightSub - r);
       if (nx === u.x && ny === u.y) continue;
-      if (this.isFree(u, nx, ny)) {
+      if (this.terrain.walkableAt(nx, ny) && this.isFree(u, nx, ny)) {
         u.x = nx;
         u.y = ny;
         u.moved = true;
@@ -776,8 +794,11 @@ export class Battle {
     for (let i = 0; i < n; i++) {
       if (shiftX[i] === 0 && shiftY[i] === 0) continue;
       const u = units[i];
-      u.x = Math.min(Math.max(u.x + shiftX[i], r), this.widthSub - r);
-      u.y = Math.min(Math.max(u.y + shiftY[i], r), this.heightSub - r);
+      const nx = Math.min(Math.max(u.x + shiftX[i], r), this.widthSub - r);
+      const ny = Math.min(Math.max(u.y + shiftY[i], r), this.heightSub - r);
+      if (!this.terrain.walkableAt(nx, ny)) continue; // never pushed into deep water
+      u.x = nx;
+      u.y = ny;
     }
   }
 

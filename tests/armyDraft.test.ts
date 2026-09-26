@@ -19,33 +19,33 @@ import { UNIT_TYPES } from '../src/config/gameConfig';
 
 const H = OPEN_PLAINS.height;
 
-describe('army draft (groups of 5)', () => {
-  it('default counts are 10 groups plus the King = 51 units', () => {
+describe('army draft (groups of 3)', () => {
+  it('default counts are 12 groups plus the King = 37 units', () => {
     const d = newDraft();
-    expect(totalGroups(d.counts)).toBe(10);
+    expect(totalGroups(d.counts)).toBe(12);
     expect(d.counts.king).toBe(1);
-    expect(armySize()).toBe(51);
+    expect(armySize()).toBe(37);
   });
 
-  it('auto-place gives a valid army on either side, groups as vertical lines of 5', () => {
+  it('auto-place gives a valid army on either side, groups as vertical lines of 3', () => {
     const d = newDraft();
     expect(autoPlace(d, H)).toBe(true);
     expect(allPlaced(d)).toBe(true);
     const setup = draftToSetup(d, 0, OPEN_PLAINS.width);
-    expect(setup.units.length).toBe(51);
+    expect(setup.units.length).toBe(37);
     expect(validateArmy(setup, 0, OPEN_PLAINS)).toEqual([]);
     expect(validateArmy(draftToSetup(d, 1, OPEN_PLAINS.width), 1, OPEN_PLAINS)).toEqual([]);
     for (const g of d.groups) {
-      const tiles = setup.units.filter((u) => u.type === g.type && u.tx === g.tx && u.ty >= g.ty && u.ty < g.ty + 5);
-      expect(tiles.length).toBe(g.type === 'king' ? 1 : 5);
+      const tiles = setup.units.filter((u) => u.type === g.type && u.tx === g.tx && u.ty >= g.ty && u.ty < g.ty + 3);
+      expect(tiles.length).toBe(g.type === 'king' ? 1 : 3);
     }
   });
 
-  it('auto-place handles extreme mixes (10 groups of one type)', () => {
+  it('auto-place handles extreme mixes (12 groups of one type)', () => {
     for (const type of ['swordsman', 'archer', 'horseman', 'spearman'] as const) {
       const d = newDraft();
       for (const t of UNIT_TYPES) d.counts[t] = t === 'king' ? 1 : 0;
-      d.counts[type] = 10;
+      d.counts[type] = 12;
       expect(autoPlace(d, H)).toBe(true);
       expect(validateArmy(draftToSetup(d, 0, OPEN_PLAINS.width), 0, OPEN_PLAINS)).toEqual([]);
     }
@@ -61,23 +61,23 @@ describe('army draft (groups of 5)', () => {
 
   it('groups cannot overlap or stick out of the zone', () => {
     const d = newDraft();
-    d.groups.push({ type: 'archer', stance: 'advance', tx: 2, ty: 5 }); // rows 5-9
-    expect(fits(d, 'swordsman', 2, 9, H)).toBe(false); // overlaps row 9
-    expect(fits(d, 'swordsman', 2, 10, H)).toBe(true);
+    d.groups.push({ type: 'archer', stance: 'advance', tx: 2, ty: 5 }); // rows 5-7
+    expect(fits(d, 'swordsman', 2, 7, H)).toBe(false); // overlaps row 7
+    expect(fits(d, 'swordsman', 2, 8, H)).toBe(true);
     expect(fits(d, 'swordsman', 6, 0, H)).toBe(false); // outside the zone
-    expect(fits(d, 'swordsman', 0, 16, H)).toBe(false); // would reach row 20
-    expect(topRowFor('swordsman', 19, H)).toBe(15); // tapped near the bottom: pushed up
+    expect(fits(d, 'swordsman', 0, 18, H)).toBe(false); // would reach row 20
+    expect(topRowFor('swordsman', 19, H)).toBe(17); // tapped near the bottom: pushed up
     expect(groupAt(d, 2, 7)).toBe(0);
   });
 
-  it('limits: max 1 group of Medics and of Mages, max 10 groups total', () => {
+  it('limits: max 1 group of Medics and of Mages, max 12 groups total', () => {
     const d = newDraft();
     for (const t of UNIT_TYPES) d.counts[t] = t === 'king' ? 1 : 0;
     d.counts.medic = 1;
     expect(canIncrease(d.counts, 'medic')).toBe(false);
     expect(canIncrease(d.counts, 'king')).toBe(false);
-    d.counts.archer = 9;
-    expect(canIncrease(d.counts, 'archer')).toBe(false); // 10 groups reached
+    d.counts.archer = 11;
+    expect(canIncrease(d.counts, 'archer')).toBe(false); // 12 groups reached
   });
 
   it('time-out auto-complete turns a partial setup into a valid army', () => {
